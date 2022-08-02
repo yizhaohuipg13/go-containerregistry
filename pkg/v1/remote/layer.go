@@ -63,27 +63,35 @@ func (rl *remoteLayer) Exists() (bool, error) {
 	return rl.blobExists(rl.digest)
 }
 
-// Layer reads the given blob reference from a registry as a Layer. A blob
-// reference here is just a punned name.Digest where the digest portion is the
-// digest of the blob to be read and the repository portion is the repo where
-// that blob lives.
-func Layer(ref name.Digest, options ...Option) (v1.Layer, error) {
+func downloadLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error) {
 	o, err := makeOptions(ref.Context(), options...)
 	if err != nil {
-		return nil, err
+		return nil, v1.Hash{}, err
 	}
 	f, err := makeFetcher(ref, o)
 	if err != nil {
-		return nil, err
+		return nil, v1.Hash{}, err
 	}
 	h, err := v1.NewHash(ref.Identifier())
 	if err != nil {
-		return nil, err
+		return nil, v1.Hash{}, err
 	}
 	l, err := partial.CompressedToLayer(&remoteLayer{
 		fetcher: *f,
 		digest:  h,
 	})
+	if err != nil {
+		return nil, v1.Hash{}, err
+	}
+	return l, h, nil
+}
+
+// Layer reads the given blob reference from a registry as a Layer. A blob
+// reference here is just a punned name.Digest where the digest portion is the
+// digest of the blob to be read and the repository portion is the repo where
+// that blob lives.
+func Layer(ref name.Digest, options ...Option) (v1.Layer, error) {
+	l, _, err := downloadLayer(ref, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,4 +99,12 @@ func Layer(ref name.Digest, options ...Option) (v1.Layer, error) {
 		Layer:     l,
 		Reference: ref,
 	}, nil
+}
+
+// SingleLayer reads the given blob reference from a registry as a Layer. A blob
+// reference here is just a punned name.Digest where the digest portion is the
+// digest to the blob to be read and the repository portion is the repo where
+// that blob lives. Difference with Layer, SingleLayer return v1.Layer data without Reference.
+func SingleLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error) {
+	return downloadLayer(ref, options...)
 }

@@ -90,15 +90,15 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, opts ...WriteOption) error {
 	// process options
 	o := &writeOptions{
-		updates: nil,
+		updates:  nil,
+		layerSet: nil,
 	}
 	for _, option := range opts {
 		if err := option(o); err != nil {
 			return err
 		}
 	}
-
-	size, mBytes, err := getSizeAndManifest(refToImage)
+	size, mBytes, err := getSizeAndManifest(refToImage, o)
 	if err != nil {
 		return sendUpdateReturn(o, err)
 	}
@@ -190,7 +190,9 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 				continue
 			}
 			seenLayerDigests[hex] = struct{}{}
-
+			if exist := o.layerSet[hex]; exist {
+				continue
+			}
 			r, err := l.Compressed()
 			if err != nil {
 				return sendProgressWriterReturn(pw, err)
@@ -290,11 +292,11 @@ func calculateManifest(refToImage map[name.Reference]v1.Image) (m Manifest, err 
 
 // CalculateSize calculates the expected complete size of the output tar file
 func CalculateSize(refToImage map[name.Reference]v1.Image) (size int64, err error) {
-	size, _, err = getSizeAndManifest(refToImage)
+	size, _, err = getSizeAndManifest(refToImage, nil)
 	return size, err
 }
 
-func getSizeAndManifest(refToImage map[name.Reference]v1.Image) (int64, []byte, error) {
+func getSizeAndManifest(refToImage map[name.Reference]v1.Image, o *writeOptions) (int64, []byte, error) {
 	m, err := calculateManifest(refToImage)
 	if err != nil {
 		return 0, nil, fmt.Errorf("unable to calculate manifest: %w", err)
@@ -304,7 +306,12 @@ func getSizeAndManifest(refToImage map[name.Reference]v1.Image) (int64, []byte, 
 		return 0, nil, fmt.Errorf("could not marshall manifest to bytes: %w", err)
 	}
 
-	size, err := calculateTarballSize(refToImage, mBytes)
+	var size int64
+	if o != nil {
+		size, err = calculateTarballSizeWithOptions(refToImage, mBytes, o)
+	} else {
+		size, err = calculateTarballSize(refToImage, mBytes)
+	}
 	if err != nil {
 		return 0, nil, fmt.Errorf("error calculating tarball size: %w", err)
 	}
@@ -323,6 +330,30 @@ func calculateTarballSize(refToImage map[name.Reference]v1.Image, mBytes []byte)
 		size += calculateSingleFileInTarSize(manifest.Config.Size)
 		for _, l := range manifest.Layers {
 			size += calculateSingleFileInTarSize(l.Size)
+		}
+	}
+	// add the manifest
+	size += calculateSingleFileInTarSize(int64(len(mBytes)))
+
+	// add the two padding blocks that indicate end of a tar file
+	size += 1024
+	return size, nil
+}
+
+// calculateTarballSizeWithOptions calculates the size of the tar file with options
+func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBytes []byte, o *writeOptions) (size int64, err error) {
+	imageToTags := dedupRefToImage(refToImage)
+
+	for img, name := range imageToTags {
+		manifest, err := img.Manifest()
+		if err != nil {
+			return size, fmt.Errorf("unable to get manifest for img %s: %w", name, err)
+		}
+		size += calculateSingleFileInTarSize(manifest.Config.Size)
+		for _, l := range manifest.Layers {
+			if o.layerSet == nil || !o.layerSet[l.Digest.String()] {
+				size += calculateSingleFileInTarSize(l.Size)
+			}
 		}
 	}
 	// add the manifest
@@ -386,7 +417,8 @@ func ComputeManifest(refToImage map[name.Reference]v1.Image) (Manifest, error) {
 // WriteOption a function option to pass to Write()
 type WriteOption func(*writeOptions) error
 type writeOptions struct {
-	updates chan<- v1.Update
+	updates  chan<- v1.Update
+	layerSet map[string]bool
 }
 
 // WithProgress create a WriteOption for passing to Write() that enables
@@ -394,6 +426,15 @@ type writeOptions struct {
 func WithProgress(updates chan<- v1.Update) WriteOption {
 	return func(o *writeOptions) error {
 		o.updates = updates
+		return nil
+	}
+}
+
+// WithLayerSet create a WriteOption for passing to Write() that enables
+// ignore layer when layer hash existed in layer set
+func WithLayerSet(layerSet map[string]bool) WriteOption {
+	return func(o *writeOptions) error {
+		o.layerSet = layerSet
 		return nil
 	}
 }

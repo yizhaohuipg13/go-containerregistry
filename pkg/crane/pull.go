@@ -16,6 +16,7 @@ package crane
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	legacy "github.com/google/go-containerregistry/pkg/legacy/tarball"
@@ -87,6 +88,27 @@ func PullLayer(ref string, opt ...Option) (v1.Layer, error) {
 	}
 
 	return remote.Layer(digest, o.Remote...)
+}
+
+// SaveLayer writes the layer as a tarball with writer
+func SaveLayer(ref string, opt ...Option) (string, error) {
+	o := makeOptions(opt...)
+	digest, err := name.NewDigest(ref, o.Name...)
+	if err != nil {
+		return "", err
+	}
+	l, h, err := remote.SingleLayer(digest, o.Remote...)
+	if err != nil {
+		return "", err
+	}
+	blob, err := l.Compressed()
+	if err != nil {
+		return "", fmt.Errorf("fetching blob %s: %w", digest, err)
+	}
+	if _, err = io.Copy(o.W, blob); err != nil {
+		return "", fmt.Errorf("copying blob %s: %w", digest, err)
+	}
+	return h.String(), nil
 }
 
 // SaveLegacy writes the v1.Image img as a legacy tarball at path with tag src.

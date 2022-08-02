@@ -16,6 +16,7 @@ package crane
 
 import (
 	"context"
+	"io"
 	"net/http"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -30,6 +31,7 @@ type Options struct {
 	Remote   []remote.Option
 	Platform *v1.Platform
 	Keychain authn.Keychain
+	W        io.Writer
 }
 
 // GetOptions exposes the underlying []remote.Option, []name.Option, and
@@ -123,5 +125,12 @@ func WithNondistributable() Option {
 func WithContext(ctx context.Context) Option {
 	return func(o *Options) {
 		o.Remote = append(o.Remote, remote.WithContext(ctx))
+	}
+}
+
+// WithWriter is an option that allows to set io.Writer in options
+func WithWriter(w io.Writer) Option {
+	return func(o *Options) {
+		o.W = w
 	}
 }
