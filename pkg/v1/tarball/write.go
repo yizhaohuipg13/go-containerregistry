@@ -181,7 +181,10 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			// https://www.gnu.org/software/tar/manual/html_section/tar_45.html
 			// Drop the algorithm prefix, e.g. "sha256:"
 			hex := d.Hex
-
+			if o.layerSet != nil && !o.layerSet[d.String()] {
+				seenLayerDigests[hex] = struct{}{}
+				continue
+			}
 			// gunzip expects certain file extensions:
 			// https://www.gnu.org/software/gzip/manual/html_node/Overview.html
 			layerFiles[i] = fmt.Sprintf("%s.tar.gz", hex)
