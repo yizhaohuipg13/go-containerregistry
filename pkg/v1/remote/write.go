@@ -59,10 +59,13 @@ func Write(ref name.Reference, img v1.Image, options ...Option) (rerr error) {
 		defer close(o.updates)
 		defer func() { _ = p.err(rerr) }()
 	}
+	if o.layerSet != nil {
+		return writeImageWithLayerSet(o.context, ref, img, o, p)
+	}
 	return writeImage(o.context, ref, img, o, p)
 }
 
-func writeImage(ctx context.Context, ref name.Reference, img v1.Image, o *options, progress *progress) error {
+func writeImageWithLayerSet(ctx context.Context, ref name.Reference, img v1.Image, o *options, p *progress) error {
 	ls, err := img.Layers()
 	if err != nil {
 		return err
@@ -72,14 +75,7 @@ func writeImage(ctx context.Context, ref name.Reference, img v1.Image, o *option
 	if err != nil {
 		return err
 	}
-	w := writer{
-		repo:      ref.Context(),
-		client:    &http.Client{Transport: tr},
-		context:   ctx,
-		progress:  progress,
-		backoff:   o.retryBackoff,
-		predicate: o.retryPredicate,
-	}
+	w := initWriter(ctx, ref, o, p, tr)
 
 	// Upload individual blobs and collect any errors.
 	blobChan := make(chan v1.Layer, 2*o.jobs)
@@ -167,6 +163,119 @@ func writeImage(ctx context.Context, ref name.Reference, img v1.Image, o *option
 	return w.commitManifest(ctx, img, ref)
 }
 
+func writeImage(ctx context.Context, ref name.Reference, img v1.Image, o *options, progress *progress) error {
+	ls, err := img.Layers()
+	if err != nil {
+		return err
+	}
+	scopes := scopesForUploadingImage(ref.Context(), ls)
+	tr, err := transport.NewWithContext(o.context, ref.Context().Registry, o.auth, o.transport, scopes)
+	if err != nil {
+		return err
+	}
+	w := initWriter(ctx, ref, o, progress, tr)
+
+	// Upload individual blobs and collect any errors.
+	blobChan := make(chan v1.Layer, 2*o.jobs)
+	g, gctx := errgroup.WithContext(ctx)
+	for i := 0; i < o.jobs; i++ {
+		// Start N workers consuming blobs to upload.
+		g.Go(func() error {
+			for b := range blobChan {
+				if err := w.uploadOne(gctx, b); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	// Upload individual layers in goroutines and collect any errors.
+	// If we can dedupe by the layer digest, try to do so. If we can't determine
+	// the digest for whatever reason, we can't dedupe and might re-upload.
+	g.Go(func() error {
+		defer close(blobChan)
+		uploaded := map[v1.Hash]bool{}
+		for _, l := range ls {
+			l := l
+
+			// Handle foreign layers.
+			mt, err := l.MediaType()
+			if err != nil {
+				return err
+			}
+			if !mt.IsDistributable() && !o.allowNondistributableArtifacts {
+				continue
+			}
+
+			// Streaming layers calculate their digests while uploading them. Assume
+			// an error here indicates we need to upload the layer.
+			h, err := l.Digest()
+			if err == nil {
+				// If we can determine the layer's digest ahead of
+				// time, use it to dedupe uploads.
+				if uploaded[h] {
+					continue // Already uploading.
+				}
+				uploaded[h] = true
+			}
+			select {
+			case blobChan <- l:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+		return nil
+	})
+
+	if l, err := partial.ConfigLayer(img); err != nil {
+		// We can't read the ConfigLayer, possibly because of streaming layers,
+		// since the layer DiffIDs haven't been calculated yet. Attempt to wait
+		// for the other layers to be uploaded, then try the config again.
+		if err := g.Wait(); err != nil {
+			return err
+		}
+
+		// Now that all the layers are uploaded, try to upload the config file blob.
+		l, err := partial.ConfigLayer(img)
+		if err != nil {
+			return err
+		}
+		if err := w.uploadOne(ctx, l); err != nil {
+			return err
+		}
+	} else {
+		// We *can* read the ConfigLayer, so upload it concurrently with the layers.
+		g.Go(func() error {
+			return w.uploadOne(gctx, l)
+		})
+
+		// Wait for the layers + config.
+		if err := g.Wait(); err != nil {
+			return err
+		}
+	}
+
+	// With all of the constituent elements uploaded, upload the manifest
+	// to commit the image.
+	return w.commitManifest(ctx, img, ref)
+}
+
+func initWriter(ctx context.Context, ref name.Reference, o *options, p *progress, tr http.RoundTripper) writer {
+	w := writer{
+		repo:      ref.Context(),
+		client:    &http.Client{Transport: tr},
+		context:   ctx,
+		progress:  p,
+		backoff:   o.retryBackoff,
+		predicate: o.retryPredicate,
+	}
+	if o.layerSet != nil {
+		w.layerSet = o.layerSet
+	}
+	return w
+}
+
 // writer writes the elements of an image to a remote image reference.
 type writer struct {
 	repo    name.Repository
@@ -176,6 +285,7 @@ type writer struct {
 	progress  *progress
 	backoff   Backoff
 	predicate retry.Predicate
+	layerSet  map[string]bool
 }
 
 // url returns a url.Url for the specified path in the context of this remote image reference.
@@ -398,6 +508,83 @@ func (w *writer) incrProgress(written int64) {
 
 // uploadOne performs a complete upload of a single layer.
 func (w *writer) uploadOne(ctx context.Context, l v1.Layer) error {
+	tryUpload := func() error {
+		var from, mount, origin string
+		if h, err := l.Digest(); err == nil {
+			// If we know the digest, this isn't a streaming layer. Do an existence
+			// check so we can skip uploading the layer if possible.
+			existing, err := w.checkExistingBlob(h)
+			if err != nil {
+				return err
+			}
+			if existing {
+				size, err := l.Size()
+				if err != nil {
+					return err
+				}
+				w.incrProgress(size)
+				logs.Progress.Printf("existing blob: %v", h)
+				return nil
+			}
+
+			mount = h.String()
+		}
+		if ml, ok := l.(*MountableLayer); ok {
+			from = ml.Reference.Context().RepositoryStr()
+			origin = ml.Reference.Context().RegistryStr()
+		}
+
+		location, mounted, err := w.initiateUpload(from, mount, origin)
+		if err != nil {
+			return err
+		} else if mounted {
+			size, err := l.Size()
+			if err != nil {
+				return err
+			}
+			w.incrProgress(size)
+			h, err := l.Digest()
+			if err != nil {
+				return err
+			}
+			logs.Progress.Printf("mounted blob: %s", h.String())
+			return nil
+		}
+
+		// Only log layers with +json or +yaml. We can let through other stuff if it becomes popular.
+		// TODO(opencontainers/image-spec#791): Would be great to have an actual parser.
+		mt, err := l.MediaType()
+		if err != nil {
+			return err
+		}
+		smt := string(mt)
+		if !(strings.HasSuffix(smt, "+json") || strings.HasSuffix(smt, "+yaml")) {
+			ctx = redact.NewContext(ctx, "omitting binary blobs from logs")
+		}
+
+		location, err = w.streamBlob(ctx, l, location)
+		if err != nil {
+			return err
+		}
+
+		h, err := l.Digest()
+		if err != nil {
+			return err
+		}
+		digest := h.String()
+
+		if err := w.commitBlob(location, digest); err != nil {
+			return err
+		}
+		logs.Progress.Printf("pushed blob: %s", digest)
+		return nil
+	}
+
+	return retry.Retry(tryUpload, w.predicate, w.backoff)
+}
+
+// uploadOneWithLayerSet performs a complete upload of a single layer with ignore check.
+func (w *writer) uploadOneWithLayerSet(ctx context.Context, l v1.Layer) error {
 	tryUpload := func() error {
 		var from, mount, origin string
 		if h, err := l.Digest(); err == nil {

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/go-containerregistry/pkg/logs"
 	"io"
 	"os"
 	"sort"
@@ -149,7 +150,7 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 	defer tf.Close()
 
 	seenLayerDigests := make(map[string]struct{})
-
+	fmt.Println(o.layerSet)
 	for img := range imageToTags {
 		// Write the config.
 		cfgName, err := img.ConfigName()
@@ -181,7 +182,8 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			// https://www.gnu.org/software/tar/manual/html_section/tar_45.html
 			// Drop the algorithm prefix, e.g. "sha256:"
 			hex := d.Hex
-			if o.layerSet != nil && !o.layerSet[d.String()] {
+			if o.layerSet != nil && o.layerSet[d.String()] {
+				logs.Progress.Printf("jumped blob: %v", d.String())
 				seenLayerDigests[hex] = struct{}{}
 				continue
 			}
