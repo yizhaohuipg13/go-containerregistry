@@ -19,7 +19,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/google/go-containerregistry/internal/gzip"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
@@ -54,7 +53,7 @@ func (ule *uncompressedLayerExtender) Compressed() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return gzip.ReadCloser(u), nil
+	return u, nil
 }
 
 // Digest implements v1.Layer
