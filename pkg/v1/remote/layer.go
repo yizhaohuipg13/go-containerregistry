@@ -15,6 +15,7 @@
 package remote
 
 import (
+	"encoding/json"
 	"io"
 
 	"github.com/google/go-containerregistry/internal/redact"
@@ -86,6 +87,28 @@ func downloadLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error
 	return l, h, nil
 }
 
+func downloadLayers(ref name.Digest, options ...Option) ([]v1.Descriptor, v1.Hash, error) {
+	o, err := makeOptions(ref.Context(), options...)
+	if err != nil {
+		return nil, v1.Hash{}, err
+	}
+	f, err := makeFetcher(ref, o)
+	if err != nil {
+		return nil, v1.Hash{}, err
+	}
+	h, err := v1.NewHash(ref.Identifier())
+	if err != nil {
+		return nil, v1.Hash{}, err
+	}
+	var mf v1.Manifest
+	mfBytes, _, err := f.fetchManifest(ref, acceptableImageMediaTypes)
+	if err := json.Unmarshal(mfBytes, &mf); err != nil {
+		return nil, v1.Hash{}, err
+	}
+
+	return mf.Layers, h, nil
+}
+
 // Layer reads the given blob reference from a registry as a Layer. A blob
 // reference here is just a punned name.Digest where the digest portion is the
 // digest of the blob to be read and the repository portion is the repo where
@@ -107,4 +130,8 @@ func Layer(ref name.Digest, options ...Option) (v1.Layer, error) {
 // that blob lives. Difference with Layer, SingleLayer return v1.Layer data without Reference.
 func SingleLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error) {
 	return downloadLayer(ref, options...)
+}
+
+func Layers(ref name.Digest, options ...Option) ([]v1.Descriptor, v1.Hash, error) {
+	return downloadLayers(ref, options...)
 }

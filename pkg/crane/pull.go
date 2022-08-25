@@ -15,9 +15,11 @@
 package crane
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	legacy "github.com/google/go-containerregistry/pkg/legacy/tarball"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -54,12 +56,35 @@ func Save(img v1.Image, src, path string) error {
 func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 	o := makeOptions(opt...)
 	tagToImage := map[name.Tag]v1.Image{}
+	imageToDigests := map[string][]string{}
 
 	for src, img := range imgMap {
 		ref, err := name.ParseReference(src, o.Name...)
 		if err != nil {
 			return fmt.Errorf("parsing ref %q: %w", src, err)
 		}
+
+		imageName, err := img.ConfigName()
+		if err != nil {
+			return fmt.Errorf("faild to get image config name: %v", err)
+		}
+
+		mf, err := img.Manifest()
+		if err != nil {
+			return fmt.Errorf("faild to get manifest: %v", err)
+		}
+
+		imgStore, err := GetImageStore(mf.Config.Digest)
+		if err != nil {
+			return fmt.Errorf("faild to get store image: %v", err)
+		}
+
+		var layerDigests []string
+		for _, id := range imgStore.RootFS.DiffIDs {
+			layerDigests = append(layerDigests, id.Hex)
+		}
+
+		imageToDigests[imageName.String()] = layerDigests
 
 		// WriteToFile wants a tag to write to the tarball, but we might have
 		// been given a digest.
@@ -76,7 +101,40 @@ func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 		tagToImage[tag] = img
 	}
 	// no progress channel (for now)
-	return tarball.MultiWriteToFile(path, tagToImage)
+	return tarball.MultiWriteToFile(path, tagToImage, imageToDigests)
+}
+
+const (
+	root           = "/var/lib/docker/image/overlay2/imagedb"
+	contentDirName = "content"
+)
+
+func GetImageStore(dgst v1.Hash) (v1.ConfigFile, error) {
+	var configFile v1.ConfigFile
+	config, err := GetImageStoreContent(dgst)
+	if err != nil {
+		return v1.ConfigFile{}, err
+	}
+	if err := json.Unmarshal(config, &configFile); err != nil {
+		return v1.ConfigFile{}, err
+	}
+
+	return configFile, nil
+}
+
+func GetImageStoreContent(dgst v1.Hash) ([]byte, error) {
+	content, err := os.ReadFile(contentFile(dgst))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get digest %s,err:%v", dgst, err)
+	}
+	//if digest.FromBytes(content) != dgst {
+	//	return nil, fmt.Errorf("failed to verify: %v", dgst)
+	//}
+	return content, nil
+}
+
+func contentFile(dgst v1.Hash) string {
+	return filepath.Join(root, contentDirName, dgst.Algorithm, dgst.Hex)
 }
 
 // PullLayer returns the given layer from a registry.
