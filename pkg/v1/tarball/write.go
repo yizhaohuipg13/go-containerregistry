@@ -204,7 +204,8 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, imageToDigests map
 
 			// gunzip expects certain file extensions:
 			// https://www.gnu.org/software/gzip/manual/html_node/Overview.html
-			layerFiles[i] = fmt.Sprintf("%s.tar.gz", hex)
+			os.Mkdir(hex, os.ModePerm)
+			layerFiles[i] = fmt.Sprintf("%s/layer.tar", hex)
 
 			if _, ok := seenLayerDigests[hex]; ok {
 				continue

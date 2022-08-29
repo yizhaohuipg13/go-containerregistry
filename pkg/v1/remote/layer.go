@@ -136,7 +136,9 @@ func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error
 		if err != nil {
 			return err
 		}
-		layerFile := fmt.Sprintf("%s.tar.gz", d.Hex)
+
+		os.Mkdir(d.Hex, os.ModePerm)
+		layerFile := fmt.Sprintf("%s/layer.tar", d.Hex)
 
 		blob, err := l.Compressed()
 		if err != nil {
