@@ -32,6 +32,7 @@ type Options struct {
 	Platform *v1.Platform
 	Keychain authn.Keychain
 	W        io.Writer
+	Digest   []name.Digest
 }
 
 // GetOptions exposes the underlying []remote.Option, []name.Option, and
@@ -132,5 +133,11 @@ func WithContext(ctx context.Context) Option {
 func WithWriter(w io.Writer) Option {
 	return func(o *Options) {
 		o.W = w
+	}
+}
+
+func WithDigests(dgsts []name.Digest) Option {
+	return func(o *Options) {
+		o.Digest = dgsts
 	}
 }

@@ -17,7 +17,6 @@ package crane
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -55,6 +54,7 @@ func Save(img v1.Image, src, path string) error {
 // MultiSave writes collection of v1.Image img with tag as a tarball.
 func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 	o := makeOptions(opt...)
+
 	tagToImage := map[name.Tag]v1.Image{}
 	imageToDigests := map[string][]string{}
 
@@ -148,25 +148,16 @@ func PullLayer(ref string, opt ...Option) (v1.Layer, error) {
 	return remote.Layer(digest, o.Remote...)
 }
 
-// SaveLayer writes the layer as a tarball with writer
-func SaveLayer(ref string, opt ...Option) (string, error) {
-	o := makeOptions(opt...)
-	digest, err := name.NewDigest(ref, o.Name...)
-	if err != nil {
-		return "", err
+// SaveLayers writes the layer as a tarball with writer
+// path example: /tmp/demo.tar
+func SaveLayers(path string, opts ...Option) error {
+	o := makeOptions(opts...)
+	digests := make([]name.Digest, 0)
+	for _, option := range o.Digest {
+		digests = append(digests, option)
 	}
-	l, h, err := remote.SingleLayer(digest, o.Remote...)
-	if err != nil {
-		return "", err
-	}
-	blob, err := l.Compressed()
-	if err != nil {
-		return "", fmt.Errorf("fetching blob %s: %w", digest, err)
-	}
-	if _, err = io.Copy(o.W, blob); err != nil {
-		return "", fmt.Errorf("copying blob %s: %w", digest, err)
-	}
-	return h.String(), nil
+
+	return remote.SaveSpecifyLayers(digests, path, o.Remote...)
 }
 
 // SaveLegacy writes the v1.Image img as a legacy tarball at path with tag src.

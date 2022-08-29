@@ -107,7 +107,7 @@ func MultiRefWrite(refToImage map[name.Reference]v1.Image, imageToDigests map[st
 	return writeImagesToTar(refToImage, imageToDigests, mBytes, size, w, o)
 }
 
-func getLayerSet(imageName string, imageToDigests map[string][]string) map[string]bool {
+func getLayerSet(imageName string, imageToDigests map[string][]string) {
 	layerSet := make(map[string]bool)
 	for n, hashes := range imageToDigests {
 		if n == imageName {
@@ -116,7 +116,7 @@ func getLayerSet(imageName string, imageToDigests map[string][]string) map[strin
 			}
 		}
 	}
-	return layerSet
+	WithLayerSet(layerSet)
 }
 
 // sendUpdateReturn return the passed in error message, also sending on update channel, if it exists
@@ -177,7 +177,7 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, imageToDigests map
 			return sendProgressWriterReturn(pw, err)
 		}
 
-		o.layerSet = getLayerSet(cfgName.String(), imageToDigests)
+		getLayerSet(cfgName.String(), imageToDigests)
 
 		// Write the layers.
 		layers, err := img.Layers()

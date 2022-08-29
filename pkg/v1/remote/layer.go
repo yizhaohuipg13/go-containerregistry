@@ -15,8 +15,10 @@
 package remote
 
 import (
-	"encoding/json"
+	"archive/tar"
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/google/go-containerregistry/internal/redact"
 	"github.com/google/go-containerregistry/internal/verify"
@@ -87,28 +89,6 @@ func downloadLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error
 	return l, h, nil
 }
 
-func downloadLayers(ref name.Digest, options ...Option) ([]v1.Descriptor, v1.Hash, error) {
-	o, err := makeOptions(ref.Context(), options...)
-	if err != nil {
-		return nil, v1.Hash{}, err
-	}
-	f, err := makeFetcher(ref, o)
-	if err != nil {
-		return nil, v1.Hash{}, err
-	}
-	h, err := v1.NewHash(ref.Identifier())
-	if err != nil {
-		return nil, v1.Hash{}, err
-	}
-	var mf v1.Manifest
-	mfBytes, _, err := f.fetchManifest(ref, acceptableImageMediaTypes)
-	if err := json.Unmarshal(mfBytes, &mf); err != nil {
-		return nil, v1.Hash{}, err
-	}
-
-	return mf.Layers, h, nil
-}
-
 // Layer reads the given blob reference from a registry as a Layer. A blob
 // reference here is just a punned name.Digest where the digest portion is the
 // digest of the blob to be read and the repository portion is the repo where
@@ -132,6 +112,60 @@ func SingleLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error) 
 	return downloadLayer(ref, options...)
 }
 
-func Layers(ref name.Digest, options ...Option) ([]v1.Descriptor, v1.Hash, error) {
-	return downloadLayers(ref, options...)
+// SaveSpecifyLayers reads the given blob reference from a registry as a Layer.
+// Skip the specified layer, the digest of the layer used by the parameter refs.
+// The absolute path used by the parameter path, including the tar name.
+// options should contain remote.Option.
+func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error {
+	tw, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer tw.Close()
+
+	tf := tar.NewWriter(tw)
+	defer tf.Close()
+
+	for _, ref := range refs {
+		l, _, err := downloadLayer(ref, options...)
+		if err != nil {
+			return err
+		}
+
+		d, err := l.Digest()
+		if err != nil {
+			return err
+		}
+		layerFile := fmt.Sprintf("%s.tar.gz", d.Hex)
+
+		blob, err := l.Compressed()
+		if err != nil {
+			return err
+		}
+
+		blobSize, err := l.Size()
+		if err != nil {
+			return err
+		}
+		if err := writeTarEntry(tf, layerFile, blob, blobSize); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeTarEntry writes a file to the provided writer with a corresponding tar header
+func writeTarEntry(tf *tar.Writer, path string, r io.Reader, size int64) error {
+	hdr := &tar.Header{
+		Mode:     0644,
+		Typeflag: tar.TypeReg,
+		Size:     size,
+		Name:     path,
+	}
+	if err := tf.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err := io.Copy(tf, r)
+	return err
 }
