@@ -150,15 +150,15 @@ func PullLayer(ref string, opt ...Option) (v1.Layer, error) {
 
 // SaveLayers writes the layer as a tarball with writer
 // path example: /tmp/demo.tar
-func SaveLayers(path string, opts ...Option) error {
-	o := makeOptions(opts...)
-	digests := make([]name.Digest, 0)
-	for _, option := range o.Digest {
-		digests = append(digests, option)
-	}
-
-	return remote.SaveSpecifyLayers(digests, path, o.Remote...)
-}
+//func SaveLayers(path string, opts ...Option) error {
+//	o := makeOptions(opts...)
+//	digests := make([]name.Digest, 0)
+//	for _, option := range o.Digest {
+//		digests = append(digests, option)
+//	}
+//
+//	return remote.SaveSpecifyLayers(digests, path, image, o.Remote...)
+//}
 
 // SaveLegacy writes the v1.Image img as a legacy tarball at path with tag src.
 func SaveLegacy(img v1.Image, src, path string) error {

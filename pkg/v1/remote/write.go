@@ -65,10 +65,23 @@ func Write(ref name.Reference, img v1.Image, options ...Option) (rerr error) {
 	return writeImage(o.context, ref, img, o, p)
 }
 
+func layerSetToLayers(o *options) []v1.Layer {
+	var layers []v1.Layer
+	for layer, ok := range o.layerSet {
+		//for layer, ok := range l {
+		if !ok {
+			layers = append(layers, layer)
+		}
+		//}
+	}
+	return layers
+}
+
 func writeImageWithLayerSet(ctx context.Context, ref name.Reference, img v1.Image, o *options, p *progress) error {
-	ls, err := img.Layers()
-	if err != nil {
-		return err
+	// It has been confirmed that layerSet is not nil
+	ls := layerSetToLayers(o)
+	if len(ls) == 0 {
+		return fmt.Errorf("these layer to be uploaded already exists in the target registry")
 	}
 	scopes := scopesForUploadingImage(ref.Context(), ls)
 	tr, err := transport.NewWithContext(o.context, ref.Context().Registry, o.auth, o.transport, scopes)
@@ -285,7 +298,7 @@ type writer struct {
 	progress  *progress
 	backoff   Backoff
 	predicate retry.Predicate
-	layerSet  map[string]bool
+	layerSet  map[v1.Layer]bool
 }
 
 // url returns a url.Url for the specified path in the context of this remote image reference.
@@ -813,6 +826,9 @@ func scopesForUploadingImage(repo name.Repository, layers []v1.Layer) []string {
 				scopeSet[ml.Reference.Scope(transport.PullScope)] = struct{}{}
 			}
 		}
+		//if tl, ok := l.(*tarball.Layer); ok {
+		//	tl.Descriptor().
+		//}
 	}
 
 	scopes := make([]string, 0)

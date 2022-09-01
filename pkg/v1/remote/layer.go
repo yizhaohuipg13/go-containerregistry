@@ -16,6 +16,8 @@ package remote
 
 import (
 	"archive/tar"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -116,7 +118,7 @@ func SingleLayer(ref name.Digest, options ...Option) (v1.Layer, v1.Hash, error) 
 // Skip the specified layer, the digest of the layer used by the parameter refs.
 // The absolute path used by the parameter path, including the tar name.
 // options should contain remote.Option.
-func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error {
+func SaveSpecifyLayers(refs []name.Digest, path string, img v1.Image, options ...Option) error {
 	tw, err := os.Create(path)
 	if err != nil {
 		return err
@@ -126,6 +128,7 @@ func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error
 	tf := tar.NewWriter(tw)
 	defer tf.Close()
 
+	var digests []string
 	for _, ref := range refs {
 		l, _, err := downloadLayer(ref, options...)
 		if err != nil {
@@ -137,8 +140,9 @@ func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error
 			return err
 		}
 
-		os.Mkdir(d.Hex, os.ModePerm)
-		layerFile := fmt.Sprintf("%s/layer.tar", d.Hex)
+		digests = append(digests, d.Hex)
+
+		layerFile := fmt.Sprintf("%s.tar.gz", d.Hex)
 
 		blob, err := l.Compressed()
 		if err != nil {
@@ -154,6 +158,38 @@ func SaveSpecifyLayers(refs []name.Digest, path string, options ...Option) error
 		}
 	}
 
+	// The complete manifest.json, which includes incremental layers.
+	mfBytes, err := img.RawManifest()
+	if err != nil {
+		return err
+	}
+	if err := writeTarEntry(tf, "manifest.json", bytes.NewReader(mfBytes), int64(len(mfBytes))); err != nil {
+		return err
+	}
+
+	// The complete config.json, which also includes incremental layers
+	cfgFile, err := img.RawConfigFile()
+	if err != nil {
+		return err
+	}
+	cfgName, err := img.ConfigName()
+	if err != nil {
+		return err
+	}
+	cfgFileName := fmt.Sprintf("%s.json", cfgName.Hex)
+	if err := writeTarEntry(tf, cfgFileName, bytes.NewReader(cfgFile), int64(len(cfgFile))); err != nil {
+		return err
+	}
+
+	dBytes, err := json.Marshal(digests)
+	if err != nil {
+		return err
+	}
+
+	// The incremental layer stored in digests.json
+	if err := writeTarEntry(tf, "digests.json", bytes.NewReader(dBytes), int64(len(dBytes))); err != nil {
+		return err
+	}
 	return nil
 }
 

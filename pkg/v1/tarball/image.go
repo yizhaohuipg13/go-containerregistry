@@ -177,6 +177,7 @@ func (i *image) loadTarDescriptorAndConfig() error {
 	defer m.Close()
 
 	if err := json.NewDecoder(m).Decode(&i.manifest); err != nil {
+		fmt.Println(err)
 		return err
 	}
 
