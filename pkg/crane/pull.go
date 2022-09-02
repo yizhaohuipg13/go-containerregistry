@@ -56,35 +56,12 @@ func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 	o := makeOptions(opt...)
 
 	tagToImage := map[name.Tag]v1.Image{}
-	imageToDigests := map[string][]string{}
 
 	for src, img := range imgMap {
 		ref, err := name.ParseReference(src, o.Name...)
 		if err != nil {
 			return fmt.Errorf("parsing ref %q: %w", src, err)
 		}
-
-		imageName, err := img.ConfigName()
-		if err != nil {
-			return fmt.Errorf("faild to get image config name: %v", err)
-		}
-
-		mf, err := img.Manifest()
-		if err != nil {
-			return fmt.Errorf("faild to get manifest: %v", err)
-		}
-
-		imgStore, err := GetImageStore(mf.Config.Digest)
-		if err != nil {
-			return fmt.Errorf("faild to get store image: %v", err)
-		}
-
-		var layerDigests []string
-		for _, id := range imgStore.RootFS.DiffIDs {
-			layerDigests = append(layerDigests, id.Hex)
-		}
-
-		imageToDigests[imageName.String()] = layerDigests
 
 		// WriteToFile wants a tag to write to the tarball, but we might have
 		// been given a digest.
@@ -101,7 +78,7 @@ func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 		tagToImage[tag] = img
 	}
 	// no progress channel (for now)
-	return tarball.MultiWriteToFile(path, tagToImage, imageToDigests)
+	return tarball.MultiWriteToFile(path, tagToImage)
 }
 
 const (

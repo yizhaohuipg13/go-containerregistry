@@ -45,29 +45,29 @@ func WriteToFile(p string, ref name.Reference, img v1.Image, opts ...WriteOption
 
 // MultiWriteToFile writes in the compressed format to a tarball, on disk.
 // This is just syntactic sugar wrapping tarball.MultiWrite with a new file.
-func MultiWriteToFile(p string, tagToImage map[name.Tag]v1.Image, imageToDigests map[string][]string, opts ...WriteOption) error {
+func MultiWriteToFile(p string, tagToImage map[name.Tag]v1.Image, opts ...WriteOption) error {
 	refToImage := make(map[name.Reference]v1.Image, len(tagToImage))
 	for i, d := range tagToImage {
 		refToImage[i] = d
 	}
-	return MultiRefWriteToFile(p, refToImage, imageToDigests, opts...)
+	return MultiRefWriteToFile(p, refToImage, opts...)
 }
 
 // MultiRefWriteToFile writes in the compressed format to a tarball, on disk.
 // This is just syntactic sugar wrapping tarball.MultiRefWrite with a new file.
-func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, imageToDigests map[string][]string, opts ...WriteOption) error {
+func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, opts ...WriteOption) error {
 	w, err := os.Create(p)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
 
-	return MultiRefWrite(refToImage, imageToDigests, w, opts...)
+	return MultiRefWrite(refToImage, w, opts...)
 }
 
 // Write is a wrapper to write a single image and tag to a tarball.
 func Write(ref name.Reference, img v1.Image, w io.Writer, opts ...WriteOption) error {
-	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, map[string][]string{}, w, opts...)
+	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, opts...)
 }
 
 // MultiWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -80,7 +80,7 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 	for i, d := range tagToImage {
 		refToImage[i] = d
 	}
-	return MultiRefWrite(refToImage, map[string][]string{}, w, opts...)
+	return MultiRefWrite(refToImage, w, opts...)
 }
 
 // MultiRefWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -88,7 +88,7 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 // One manifest.json file at the top level containing information about several images.
 // One file for each layer, named after the layer's SHA.
 // One file for the config blob, named after its SHA.
-func MultiRefWrite(refToImage map[name.Reference]v1.Image, imageToDigests map[string][]string, w io.Writer, opts ...WriteOption) error {
+func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, opts ...WriteOption) error {
 	// process options
 	o := &writeOptions{
 		updates:  nil,
@@ -104,19 +104,7 @@ func MultiRefWrite(refToImage map[name.Reference]v1.Image, imageToDigests map[st
 		return sendUpdateReturn(o, err)
 	}
 
-	return writeImagesToTar(refToImage, imageToDigests, mBytes, size, w, o)
-}
-
-func getLayerSet(imageName string, imageToDigests map[string][]string) {
-	layerSet := make(map[string]bool)
-	for n, hashes := range imageToDigests {
-		if n == imageName {
-			for _, hash := range hashes {
-				layerSet[hash] = true
-			}
-		}
-	}
-	WithLayerSet(layerSet)
+	return writeImagesToTar(refToImage, mBytes, size, w, o)
 }
 
 // sendUpdateReturn return the passed in error message, also sending on update channel, if it exists
@@ -138,7 +126,7 @@ func sendProgressWriterReturn(pw *progressWriter, err error) error {
 }
 
 // writeImagesToTar writes the images to the tarball
-func writeImagesToTar(refToImage map[name.Reference]v1.Image, imageToDigests map[string][]string, m []byte, size int64, w io.Writer, o *writeOptions) (err error) {
+func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int64, w io.Writer, o *writeOptions) (err error) {
 	if w == nil {
 		return sendUpdateReturn(o, errors.New("must pass valid writer"))
 	}
@@ -177,8 +165,6 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, imageToDigests map
 			return sendProgressWriterReturn(pw, err)
 		}
 
-		getLayerSet(cfgName.String(), imageToDigests)
-
 		// Write the layers.
 		layers, err := img.Layers()
 		if err != nil {
@@ -196,10 +182,12 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, imageToDigests map
 			// https://www.gnu.org/software/tar/manual/html_section/tar_45.html
 			// Drop the algorithm prefix, e.g. "sha256:"
 			hex := d.Hex
-			if o.layerSet != nil && o.layerSet[hex] {
-				logs.Progress.Printf("jumped blob: %v", d.String())
-				seenLayerDigests[hex] = struct{}{}
-				continue
+			if o.layerSet != nil {
+				if _, ok := o.layerSet[hex]; ok {
+					logs.Progress.Printf("jumped blob: %v", d.String())
+					seenLayerDigests[hex] = struct{}{}
+					continue
+				}
 			}
 
 			// gunzip expects certain file extensions:
@@ -362,14 +350,18 @@ func calculateTarballSize(refToImage map[name.Reference]v1.Image, mBytes []byte)
 func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBytes []byte, o *writeOptions) (size int64, err error) {
 	imageToTags := dedupRefToImage(refToImage)
 
-	for img, name := range imageToTags {
+	for img, n := range imageToTags {
 		manifest, err := img.Manifest()
 		if err != nil {
-			return size, fmt.Errorf("unable to get manifest for img %s: %w", name, err)
+			return size, fmt.Errorf("unable to get manifest for img %s: %w", n, err)
 		}
 		size += calculateSingleFileInTarSize(manifest.Config.Size)
 		for _, l := range manifest.Layers {
-			if o.layerSet == nil || !o.layerSet[l.Digest.String()] {
+			if o.layerSet != nil {
+				if _, ok := o.layerSet[l.Digest.String()]; !ok {
+					size += calculateSingleFileInTarSize(l.Size)
+				}
+			} else {
 				size += calculateSingleFileInTarSize(l.Size)
 			}
 		}
@@ -436,7 +428,7 @@ func ComputeManifest(refToImage map[name.Reference]v1.Image) (Manifest, error) {
 type WriteOption func(*writeOptions) error
 type writeOptions struct {
 	updates  chan<- v1.Update
-	layerSet map[string]bool
+	layerSet map[string]string // layer sha256sum:image sha256sum
 }
 
 // WithProgress create a WriteOption for passing to Write() that enables
@@ -450,7 +442,7 @@ func WithProgress(updates chan<- v1.Update) WriteOption {
 
 // WithLayerSet create a WriteOption for passing to Write() that enables
 // ignore layer when layer hash existed in layer set
-func WithLayerSet(layerSet map[string]bool) WriteOption {
+func WithLayerSet(layerSet map[string]string) WriteOption {
 	return func(o *writeOptions) error {
 		o.layerSet = layerSet
 		return nil

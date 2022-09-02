@@ -128,7 +128,7 @@ func SaveSpecifyLayers(refs []name.Digest, path string, img v1.Image, options ..
 	tf := tar.NewWriter(tw)
 	defer tf.Close()
 
-	var digests []string
+	var layers []v1.Descriptor
 	for _, ref := range refs {
 		l, _, err := downloadLayer(ref, options...)
 		if err != nil {
@@ -140,7 +140,17 @@ func SaveSpecifyLayers(refs []name.Digest, path string, img v1.Image, options ..
 			return err
 		}
 
-		digests = append(digests, d.Hex)
+		mt, err := l.MediaType()
+		if err != nil {
+			return err
+		}
+
+		size, err := l.Size()
+		if err != nil {
+			return err
+		}
+
+		layers = append(layers, v1.Descriptor{MediaType: mt, Size: size, Digest: d})
 
 		layerFile := fmt.Sprintf("%s.tar.gz", d.Hex)
 
@@ -181,7 +191,7 @@ func SaveSpecifyLayers(refs []name.Digest, path string, img v1.Image, options ..
 		return err
 	}
 
-	dBytes, err := json.Marshal(digests)
+	dBytes, err := json.Marshal(layers)
 	if err != nil {
 		return err
 	}

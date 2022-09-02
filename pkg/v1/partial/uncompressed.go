@@ -96,9 +96,10 @@ type UncompressedImageCore interface {
 }
 
 // UncompressedToImage fills in the missing methods from an UncompressedImageCore so that it implements v1.Image.
-func UncompressedToImage(uic UncompressedImageCore) (v1.Image, error) {
+func UncompressedToImage(uic UncompressedImageCore, rawManifest *v1.Manifest) (v1.Image, error) {
 	return &uncompressedImageExtender{
 		UncompressedImageCore: uic,
+		manifest:              rawManifest,
 	}, nil
 }
 

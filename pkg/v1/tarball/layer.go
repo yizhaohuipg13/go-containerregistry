@@ -315,7 +315,14 @@ func GetLayerFromPath(opener Opener) ([]v1.Layer, error) {
 
 	for _, d := range digests {
 		dt := fmt.Sprintf("%s.tar.gz", d)
-		op := buildLayerOpener(opener, dt)
+		op := func() (io.ReadCloser, error) {
+			lTar, err := extractFileFromTar(opener, dt)
+			if err != nil {
+				return nil, err
+			}
+
+			return lTar, nil
+		}
 
 		l, err := LayerFromOpener(op)
 		if err != nil {
@@ -327,16 +334,6 @@ func GetLayerFromPath(opener Opener) ([]v1.Layer, error) {
 		return nil, fmt.Errorf("the layer obtained by tar is empty")
 	}
 	return ls, nil
-}
-
-func buildLayerOpener(opener Opener, dt string) Opener {
-	return func() (io.ReadCloser, error) {
-		lTar, err := extractFileFromTar(opener, dt)
-		if err != nil {
-			return nil, err
-		}
-		return lTar, nil
-	}
 }
 
 func DedupLayer(remoteLayers, localLayers []v1.Layer) (map[v1.Layer]bool, error) {

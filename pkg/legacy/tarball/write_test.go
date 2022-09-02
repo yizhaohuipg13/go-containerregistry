@@ -67,7 +67,7 @@ func TestWrite(t *testing.T) {
 	// Make sure the image is valid and can be loaded.
 	// Load it both by nil and by its name.
 	for _, it := range []*name.Tag{nil, &tag} {
-		tarImage, err := tarball.ImageFromPath(fp.Name(), it)
+		tarImage, err := tarball.ImageFromPath(fp.Name(), it, false)
 		if err != nil {
 			t.Fatalf("Unexpected error reading tarball: %v", err)
 		}
@@ -84,7 +84,7 @@ func TestWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error generating tag: %v", err)
 	}
-	if _, err := tarball.ImageFromPath(fp.Name(), &fakeTag); err == nil {
+	if _, err := tarball.ImageFromPath(fp.Name(), &fakeTag, false); err == nil {
 		t.Errorf("Expected error loading tag %v from image", fakeTag)
 	}
 }
@@ -139,7 +139,7 @@ func TestMultiWriteSameImage(t *testing.T) {
 			continue
 		}
 
-		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 		if err != nil {
 			t.Fatalf("Unexpected error reading tarball: %v", err)
 		}
@@ -214,7 +214,7 @@ func TestMultiWriteDifferentImages(t *testing.T) {
 			continue
 		}
 
-		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 		if err != nil {
 			t.Fatalf("Unexpected error reading tarball: %v", err)
 		}
@@ -268,7 +268,7 @@ func TestWriteForeignLayers(t *testing.T) {
 		t.Fatalf("Unexpected error writing tarball: %v", err)
 	}
 
-	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 	if err != nil {
 		t.Fatalf("Unexpected error reading tarball: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestMultiWriteNoHistory(t *testing.T) {
 	if err := Write(tag, img, fp); err != nil {
 		t.Fatalf("Unexpected error writing tarball: %v", err)
 	}
-	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 	if err != nil {
 		t.Fatalf("Unexpected error reading tarball: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestMultiWriteHistoryEmptyLayers(t *testing.T) {
 	if err := Write(tag, img, fp); err != nil {
 		t.Fatalf("Unexpected error writing tarball: %v", err)
 	}
-	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+	tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 	if err != nil {
 		t.Fatalf("Unexpected error reading tarball: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestWriteSharedLayers(t *testing.T) {
 			continue
 		}
 
-		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag)
+		tarImage, err := tarball.ImageFromPath(fp.Name(), &tag, false)
 		if err != nil {
 			t.Fatalf("Unexpected error reading tarball: %v", err)
 		}

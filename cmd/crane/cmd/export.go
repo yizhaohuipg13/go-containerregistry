@@ -66,7 +66,7 @@ func NewCmdExport(options *[]crane.Option) *cobra.Command {
 				}
 				tmpfile.Close()
 
-				img, err = tarball.ImageFromPath(tmpfile.Name(), nil)
+				img, err = tarball.ImageFromPath(tmpfile.Name(), nil, false)
 				if err != nil {
 					return fmt.Errorf("reading tarball from stdin: %w", err)
 				}

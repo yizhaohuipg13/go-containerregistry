@@ -39,6 +39,7 @@ type image struct {
 	manifest      *Manifest
 	config        []byte
 	imgDescriptor *Descriptor
+	rawManifest   *v1.Manifest
 
 	tag *name.Tag
 }
@@ -66,8 +67,8 @@ func pathOpener(path string) Opener {
 }
 
 // ImageFromPath returns a v1.Image from a tarball located on path.
-func ImageFromPath(path string, tag *name.Tag) (v1.Image, error) {
-	return Image(pathOpener(path), tag)
+func ImageFromPath(path string, tag *name.Tag, isIncremental bool) (v1.Image, error) {
+	return Image(pathOpener(path), tag, isIncremental)
 }
 
 // LoadManifest load manifest
@@ -87,33 +88,42 @@ func LoadManifest(opener Opener) (Manifest, error) {
 }
 
 // Image exposes an image from the tarball at the provided path.
-func Image(opener Opener, tag *name.Tag) (v1.Image, error) {
+func Image(opener Opener, tag *name.Tag, isIncremental bool) (v1.Image, error) {
 	img := &image{
 		opener: opener,
 		tag:    tag,
 	}
-	if err := img.loadTarDescriptorAndConfig(); err != nil {
-		return nil, err
-	}
 
-	// Peek at the first layer and see if it's compressed.
-	if len(img.imgDescriptor.Layers) > 0 {
-		compressed, err := img.areLayersCompressed()
-		if err != nil {
+	if isIncremental {
+		// when pushing incremental packages, set the rawManifest
+		if err := img.loadTarManifestAndConfig(); err != nil {
 			return nil, err
 		}
-		if compressed {
-			c := compressedImage{
-				image: img,
-			}
-			return partial.CompressedToImage(&c)
+	} else {
+		// set manifest under normal circumstances
+		if err := img.loadTarDescriptorAndConfig(); err != nil {
+			return nil, err
 		}
+		// Peek at the first layer and see if it's compressed.
+		if len(img.imgDescriptor.Layers) > 0 {
+			compressed, err := img.areLayersCompressed()
+			if err != nil {
+				return nil, err
+			}
+			if compressed {
+				c := compressedImage{
+					image: img,
+				}
+				return partial.CompressedToImage(&c)
+			}
+		}
+
 	}
 
 	uc := uncompressedImage{
 		image: img,
 	}
-	return partial.UncompressedToImage(&uc)
+	return partial.UncompressedToImage(&uc, img.rawManifest)
 }
 
 func (i *image) MediaType() (types.MediaType, error) {
@@ -177,7 +187,6 @@ func (i *image) loadTarDescriptorAndConfig() error {
 	defer m.Close()
 
 	if err := json.NewDecoder(m).Decode(&i.manifest); err != nil {
-		fmt.Println(err)
 		return err
 	}
 
@@ -191,6 +200,35 @@ func (i *image) loadTarDescriptorAndConfig() error {
 	}
 
 	cfg, err := extractFileFromTar(i.opener, i.imgDescriptor.Config)
+	if err != nil {
+		return err
+	}
+	defer cfg.Close()
+
+	i.config, err = ioutil.ReadAll(cfg)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *image) loadTarManifestAndConfig() error {
+	m, err := extractFileFromTar(i.opener, "manifest.json")
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+
+	if err := json.NewDecoder(m).Decode(&i.rawManifest); err != nil {
+		return err
+	}
+	if i.rawManifest == nil {
+		return errors.New("no valid manifest.json in tarball")
+	}
+
+	d := i.rawManifest.Config.Digest.Hex
+	digest := fmt.Sprintf("%s.json", d)
+	cfg, err := extractFileFromTar(i.opener, digest)
 	if err != nil {
 		return err
 	}

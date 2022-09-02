@@ -32,7 +32,7 @@ func Load(path string, opt ...Option) (v1.Image, error) {
 // If tag is "", will attempt to read the tarball as a single image.
 func LoadTag(path, tag string, opt ...Option) (v1.Image, error) {
 	if tag == "" {
-		return tarball.ImageFromPath(path, nil)
+		return tarball.ImageFromPath(path, nil, false)
 	}
 
 	o := makeOptions(opt...)
@@ -40,7 +40,7 @@ func LoadTag(path, tag string, opt ...Option) (v1.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing tag %q: %w", tag, err)
 	}
-	return tarball.ImageFromPath(path, &t)
+	return tarball.ImageFromPath(path, &t, false)
 }
 
 // Push pushes the v1.Image img to a registry as dst.
@@ -76,7 +76,7 @@ func PushSingleLayer(tag, tarFile string, opt ...Option) error {
 		return fmt.Errorf("remote.Image(): %v", err)
 	}
 	if remoteImage == nil {
-		remoteImage, err = tarball.ImageFromPath(tarFile, nil)
+		remoteImage, err = tarball.ImageFromPath(tarFile, nil, false)
 		if err != nil {
 			return fmt.Errorf("load tarball image: %v", err)
 		}
@@ -88,7 +88,7 @@ func PushSingleLayer(tag, tarFile string, opt ...Option) error {
 		return fmt.Errorf("faild to get remote image: %v", err)
 	}
 
-	localImage, err := tarball.ImageFromPath(tarFile, nil)
+	localImage, err := tarball.ImageFromPath(tarFile, nil, true)
 	if err != nil {
 		return err
 	}
