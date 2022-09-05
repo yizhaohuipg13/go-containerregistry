@@ -17,6 +17,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -373,6 +374,31 @@ func (w *writer) checkExistingManifest(h v1.Hash, mt types.MediaType) (bool, err
 	}
 
 	return resp.StatusCode == http.StatusOK, nil
+}
+
+func (w *writer) GetDigestByImageName(imageName string) (v1.Hash, error) {
+	items := strings.Split(strings.TrimSpace(imageName), ":")
+	tag := items[len(items)-1]
+	u := w.url(fmt.Sprintf("/v2/%s/manifests/%s", w.repo.RepositoryStr(), tag))
+
+	req, err := http.NewRequest(http.MethodHead, u.String(), nil)
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	resp, err := w.client.Do(req.WithContext(w.context))
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	defer resp.Body.Close()
+	if err := transport.CheckError(resp, http.StatusOK, http.StatusNotFound); err != nil {
+		return v1.Hash{}, err
+	}
+
+	var manifest v1.Manifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return v1.Hash{}, err
+	}
+	return manifest.Config.Digest, nil
 }
 
 // initiateUpload initiates the blob upload, which starts with a POST that can

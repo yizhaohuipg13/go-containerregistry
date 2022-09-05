@@ -32,6 +32,7 @@ type Options struct {
 	Platform *v1.Platform
 	Keychain authn.Keychain
 	W        io.Writer
+	LayerSet map[string]string
 }
 
 // GetOptions exposes the underlying []remote.Option, []name.Option, and
@@ -46,6 +47,7 @@ func makeOptions(opts ...Option) Options {
 	opt := Options{
 		Remote: []remote.Option{
 			remote.WithAuthFromKeychain(authn.DefaultKeychain),
+			remote.WithContext(context.Background()),
 		},
 		Keychain: authn.DefaultKeychain,
 	}
@@ -132,5 +134,11 @@ func WithContext(ctx context.Context) Option {
 func WithWriter(w io.Writer) Option {
 	return func(o *Options) {
 		o.W = w
+	}
+}
+
+func WithLayerSet(layerSet map[string]string) Option {
+	return func(o *Options) {
+		o.LayerSet = layerSet
 	}
 }

@@ -15,10 +15,8 @@
 package crane
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	legacy "github.com/google/go-containerregistry/pkg/legacy/tarball"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -77,41 +75,34 @@ func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 		}
 		tagToImage[tag] = img
 	}
+
+	nameToDigest := make(map[string]string, 0)
+	var err error
+	if len(o.LayerSet) != 0 {
+		nameToDigest, err = getDigestByImageName(o.LayerSet, o)
+		if err != nil {
+			return fmt.Errorf("faild to get digest by image name: %v", err)
+		}
+	}
+
 	// no progress channel (for now)
-	return tarball.MultiWriteToFile(path, tagToImage)
+	return tarball.MultiWriteToFile(path, tagToImage, o.LayerSet, nameToDigest)
 }
 
-const (
-	root           = "/var/lib/docker/image/overlay2/imagedb"
-	contentDirName = "content"
-)
-
-func GetImageStore(dgst v1.Hash) (v1.ConfigFile, error) {
-	var configFile v1.ConfigFile
-	config, err := GetImageStoreContent(dgst)
-	if err != nil {
-		return v1.ConfigFile{}, err
+func getDigestByImageName(layerSet map[string]string, option Options) (map[string]string, error) {
+	nameToDigest := make(map[string]string, 0)
+	for _, v := range layerSet {
+		tag, err := name.NewTag(v)
+		if err != nil {
+			return nil, err
+		}
+		digest, err := remote.Get(tag, option.Remote...)
+		if err != nil {
+			return nil, err
+		}
+		nameToDigest[v] = digest.Digest.Hex
 	}
-	if err := json.Unmarshal(config, &configFile); err != nil {
-		return v1.ConfigFile{}, err
-	}
-
-	return configFile, nil
-}
-
-func GetImageStoreContent(dgst v1.Hash) ([]byte, error) {
-	content, err := os.ReadFile(contentFile(dgst))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get digest %s,err:%v", dgst, err)
-	}
-	//if digest.FromBytes(content) != dgst {
-	//	return nil, fmt.Errorf("failed to verify: %v", dgst)
-	//}
-	return content, nil
-}
-
-func contentFile(dgst v1.Hash) string {
-	return filepath.Join(root, contentDirName, dgst.Algorithm, dgst.Hex)
+	return nameToDigest, nil
 }
 
 // PullLayer returns the given layer from a registry.

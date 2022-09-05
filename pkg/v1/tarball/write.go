@@ -45,29 +45,30 @@ func WriteToFile(p string, ref name.Reference, img v1.Image, opts ...WriteOption
 
 // MultiWriteToFile writes in the compressed format to a tarball, on disk.
 // This is just syntactic sugar wrapping tarball.MultiWrite with a new file.
-func MultiWriteToFile(p string, tagToImage map[name.Tag]v1.Image, opts ...WriteOption) error {
+func MultiWriteToFile(p string, tagToImage map[name.Tag]v1.Image, layerSet map[string]string, nameToDigest map[string]string, opts ...WriteOption) error {
 	refToImage := make(map[name.Reference]v1.Image, len(tagToImage))
 	for i, d := range tagToImage {
 		refToImage[i] = d
 	}
-	return MultiRefWriteToFile(p, refToImage, opts...)
+
+	return MultiRefWriteToFile(p, refToImage, layerSet, nameToDigest, opts...)
 }
 
 // MultiRefWriteToFile writes in the compressed format to a tarball, on disk.
 // This is just syntactic sugar wrapping tarball.MultiRefWrite with a new file.
-func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, opts ...WriteOption) error {
+func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, layerSet map[string]string, nameToDigest map[string]string, opts ...WriteOption) error {
 	w, err := os.Create(p)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
 
-	return MultiRefWrite(refToImage, w, opts...)
+	return MultiRefWrite(refToImage, w, layerSet, nameToDigest, opts...)
 }
 
 // Write is a wrapper to write a single image and tag to a tarball.
 func Write(ref name.Reference, img v1.Image, w io.Writer, opts ...WriteOption) error {
-	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, opts...)
+	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, map[string]string{}, map[string]string{}, opts...)
 }
 
 // MultiWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -80,7 +81,7 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 	for i, d := range tagToImage {
 		refToImage[i] = d
 	}
-	return MultiRefWrite(refToImage, w, opts...)
+	return MultiRefWrite(refToImage, w, map[string]string{}, map[string]string{}, opts...)
 }
 
 // MultiRefWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -88,11 +89,12 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 // One manifest.json file at the top level containing information about several images.
 // One file for each layer, named after the layer's SHA.
 // One file for the config blob, named after its SHA.
-func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, opts ...WriteOption) error {
+func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, layerSet map[string]string, nameToDigest map[string]string, opts ...WriteOption) error {
 	// process options
 	o := &writeOptions{
-		updates:  nil,
-		layerSet: nil,
+		updates:      nil,
+		layerSet:     layerSet,
+		nameToDigest: nameToDigest,
 	}
 	for _, option := range opts {
 		if err := option(o); err != nil {
@@ -165,6 +167,13 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			return sendProgressWriterReturn(pw, err)
 		}
 
+		// dgst is used to compare with the value in layerSet
+		dgst, err := img.Digest()
+		if err != nil {
+			return sendProgressWriterReturn(pw, err)
+		}
+
+		mounts := make(map[string]string, 0)
 		// Write the layers.
 		layers, err := img.Layers()
 		if err != nil {
@@ -182,11 +191,18 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			// https://www.gnu.org/software/tar/manual/html_section/tar_45.html
 			// Drop the algorithm prefix, e.g. "sha256:"
 			hex := d.Hex
-			if o.layerSet != nil {
-				if _, ok := o.layerSet[hex]; ok {
-					logs.Progress.Printf("jumped blob: %v", d.String())
-					seenLayerDigests[hex] = struct{}{}
-					continue
+			if len(o.layerSet) != 0 && len(o.nameToDigest) != 0 {
+				if v, ok := o.layerSet[hex]; ok {
+					// If the current image exists in the value of layerSet
+					if val, exist := o.nameToDigest[v]; exist {
+						mounts[v] = val
+						if dgst.Hex == val {
+							logs.Progress.Printf("jumped blob: %v", d.String())
+							seenLayerDigests[hex] = struct{}{}
+
+							continue
+						}
+					}
 				}
 			}
 
@@ -212,7 +228,20 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 				return sendProgressWriterReturn(pw, err)
 			}
 		}
+
+		// write "mountable.json" for incr push
+		// If it is not an incr pull, do not write to the file
+		if len(o.layerSet) != 0 && len(mounts) != 0 {
+			mBytes, err := json.Marshal(mounts)
+			if err != nil {
+				return sendProgressWriterReturn(pw, err)
+			}
+			if err := writeTarEntry(tf, "mountable.json", bytes.NewReader(mBytes), int64(len(mBytes))); err != nil {
+				return sendProgressWriterReturn(pw, err)
+			}
+		}
 	}
+
 	if err := writeTarEntry(tf, "manifest.json", bytes.NewReader(m), int64(len(m))); err != nil {
 		return sendProgressWriterReturn(pw, err)
 	}
@@ -427,8 +456,9 @@ func ComputeManifest(refToImage map[name.Reference]v1.Image) (Manifest, error) {
 // WriteOption a function option to pass to Write()
 type WriteOption func(*writeOptions) error
 type writeOptions struct {
-	updates  chan<- v1.Update
-	layerSet map[string]string // layer sha256sum:image sha256sum
+	updates      chan<- v1.Update
+	layerSet     map[string]string // layer sha256sum:image_name
+	nameToDigest map[string]string
 }
 
 // WithProgress create a WriteOption for passing to Write() that enables

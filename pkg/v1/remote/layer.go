@@ -130,7 +130,7 @@ func SaveSpecifyLayers(refs []name.Digest, path string, img v1.Image, options ..
 
 	var layers []v1.Descriptor
 	for _, ref := range refs {
-		l, _, err := downloadLayer(ref, options...)
+		l, err := Layer(ref, options...)
 		if err != nil {
 			return err
 		}
