@@ -96,10 +96,9 @@ type UncompressedImageCore interface {
 }
 
 // UncompressedToImage fills in the missing methods from an UncompressedImageCore so that it implements v1.Image.
-func UncompressedToImage(uic UncompressedImageCore, rawManifest *v1.Manifest) (v1.Image, error) {
+func UncompressedToImage(uic UncompressedImageCore) (v1.Image, error) {
 	return &uncompressedImageExtender{
 		UncompressedImageCore: uic,
-		manifest:              rawManifest,
 	}, nil
 }
 
@@ -189,6 +188,9 @@ func (i *uncompressedImageExtender) ConfigFile() (*v1.ConfigFile, error) {
 
 // Layers implements v1.Image
 func (i *uncompressedImageExtender) Layers() ([]v1.Layer, error) {
+	// If the image is of uncompressedImageCore type,
+	// it means that the layer is all tar.gz and needs to be uploaded in full,
+	// without reading mountable.json
 	diffIDs, err := DiffIDs(i)
 	if err != nil {
 		return nil, err

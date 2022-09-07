@@ -17,7 +17,6 @@ package remote
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,121 +59,7 @@ func Write(ref name.Reference, img v1.Image, options ...Option) (rerr error) {
 		defer close(o.updates)
 		defer func() { _ = p.err(rerr) }()
 	}
-	if o.layerSet != nil {
-		return writeImageWithLayerSet(o.context, ref, img, o, p)
-	}
 	return writeImage(o.context, ref, img, o, p)
-}
-
-func layerSetToLayers(o *options) []v1.Layer {
-	var layers []v1.Layer
-	for layer, ok := range o.layerSet {
-		//for layer, ok := range l {
-		if !ok {
-			layers = append(layers, layer)
-		}
-		//}
-	}
-	return layers
-}
-
-func writeImageWithLayerSet(ctx context.Context, ref name.Reference, img v1.Image, o *options, p *progress) error {
-	// It has been confirmed that layerSet is not nil
-	ls := layerSetToLayers(o)
-	if len(ls) == 0 {
-		return fmt.Errorf("these layer to be uploaded already exists in the target registry")
-	}
-	scopes := scopesForUploadingImage(ref.Context(), ls)
-	tr, err := transport.NewWithContext(o.context, ref.Context().Registry, o.auth, o.transport, scopes)
-	if err != nil {
-		return err
-	}
-	w := initWriter(ctx, ref, o, p, tr)
-
-	// Upload individual blobs and collect any errors.
-	blobChan := make(chan v1.Layer, 2*o.jobs)
-	g, gctx := errgroup.WithContext(ctx)
-	for i := 0; i < o.jobs; i++ {
-		// Start N workers consuming blobs to upload.
-		g.Go(func() error {
-			for b := range blobChan {
-				if err := w.uploadOne(gctx, b); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	}
-
-	// Upload individual layers in goroutines and collect any errors.
-	// If we can dedupe by the layer digest, try to do so. If we can't determine
-	// the digest for whatever reason, we can't dedupe and might re-upload.
-	g.Go(func() error {
-		defer close(blobChan)
-		uploaded := map[v1.Hash]bool{}
-		for _, l := range ls {
-			l := l
-
-			// Handle foreign layers.
-			mt, err := l.MediaType()
-			if err != nil {
-				return err
-			}
-			if !mt.IsDistributable() && !o.allowNondistributableArtifacts {
-				continue
-			}
-
-			// Streaming layers calculate their digests while uploading them. Assume
-			// an error here indicates we need to upload the layer.
-			h, err := l.Digest()
-			if err == nil {
-				// If we can determine the layer's digest ahead of
-				// time, use it to dedupe uploads.
-				if uploaded[h] {
-					continue // Already uploading.
-				}
-				uploaded[h] = true
-			}
-			select {
-			case blobChan <- l:
-			case <-gctx.Done():
-				return gctx.Err()
-			}
-		}
-		return nil
-	})
-
-	if l, err := partial.ConfigLayer(img); err != nil {
-		// We can't read the ConfigLayer, possibly because of streaming layers,
-		// since the layer DiffIDs haven't been calculated yet. Attempt to wait
-		// for the other layers to be uploaded, then try the config again.
-		if err := g.Wait(); err != nil {
-			return err
-		}
-
-		// Now that all the layers are uploaded, try to upload the config file blob.
-		l, err := partial.ConfigLayer(img)
-		if err != nil {
-			return err
-		}
-		if err := w.uploadOne(ctx, l); err != nil {
-			return err
-		}
-	} else {
-		// We *can* read the ConfigLayer, so upload it concurrently with the layers.
-		g.Go(func() error {
-			return w.uploadOne(gctx, l)
-		})
-
-		// Wait for the layers + config.
-		if err := g.Wait(); err != nil {
-			return err
-		}
-	}
-
-	// With all of the constituent elements uploaded, upload the manifest
-	// to commit the image.
-	return w.commitManifest(ctx, img, ref)
 }
 
 func writeImage(ctx context.Context, ref name.Reference, img v1.Image, o *options, progress *progress) error {
@@ -284,9 +169,6 @@ func initWriter(ctx context.Context, ref name.Reference, o *options, p *progress
 		backoff:   o.retryBackoff,
 		predicate: o.retryPredicate,
 	}
-	if o.layerSet != nil {
-		w.layerSet = o.layerSet
-	}
 	return w
 }
 
@@ -374,31 +256,6 @@ func (w *writer) checkExistingManifest(h v1.Hash, mt types.MediaType) (bool, err
 	}
 
 	return resp.StatusCode == http.StatusOK, nil
-}
-
-func (w *writer) GetDigestByImageName(imageName string) (v1.Hash, error) {
-	items := strings.Split(strings.TrimSpace(imageName), ":")
-	tag := items[len(items)-1]
-	u := w.url(fmt.Sprintf("/v2/%s/manifests/%s", w.repo.RepositoryStr(), tag))
-
-	req, err := http.NewRequest(http.MethodHead, u.String(), nil)
-	if err != nil {
-		return v1.Hash{}, err
-	}
-	resp, err := w.client.Do(req.WithContext(w.context))
-	if err != nil {
-		return v1.Hash{}, err
-	}
-	defer resp.Body.Close()
-	if err := transport.CheckError(resp, http.StatusOK, http.StatusNotFound); err != nil {
-		return v1.Hash{}, err
-	}
-
-	var manifest v1.Manifest
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
-		return v1.Hash{}, err
-	}
-	return manifest.Config.Digest, nil
 }
 
 // initiateUpload initiates the blob upload, which starts with a POST that can
@@ -852,9 +709,6 @@ func scopesForUploadingImage(repo name.Repository, layers []v1.Layer) []string {
 				scopeSet[ml.Reference.Scope(transport.PullScope)] = struct{}{}
 			}
 		}
-		//if tl, ok := l.(*tarball.Layer); ok {
-		//	tl.Descriptor().
-		//}
 	}
 
 	scopes := make([]string, 0)

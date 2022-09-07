@@ -32,6 +32,10 @@ type layoutImage struct {
 	rawManifest  []byte
 }
 
+func (li *layoutImage) LayerByMountable(h v1.Hash) (v1.Layer, bool, error) {
+	return nil, false, nil
+}
+
 var _ partial.CompressedImageCore = (*layoutImage)(nil)
 
 // Image reads a v1.Image with digest h from the Path.

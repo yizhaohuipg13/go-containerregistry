@@ -46,7 +46,6 @@ type options struct {
 	pageSize                       int
 	retryBackoff                   Backoff
 	retryPredicate                 retry.Predicate
-	layerSet                       map[v1.Layer]bool // 如果检查blob存在则对应layer不更新
 }
 
 var defaultPlatform = v1.Platform{
@@ -288,14 +287,6 @@ func WithRetryBackoff(backoff Backoff) Option {
 func WithRetryPredicate(predicate retry.Predicate) Option {
 	return func(o *options) error {
 		o.retryPredicate = predicate
-		return nil
-	}
-}
-
-// WithLayerSet sets the layer sets for retry HTTP operations.
-func WithLayerSet(layerSet map[v1.Layer]bool) Option {
-	return func(o *options) error {
-		o.layerSet = layerSet
 		return nil
 	}
 }

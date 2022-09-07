@@ -25,12 +25,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/go-containerregistry/internal/gzip"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/partial"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
@@ -52,6 +54,7 @@ type compressedImage struct {
 	*image
 	manifestLock sync.Mutex // Protects manifest
 	manifest     *v1.Manifest
+	mount        map[string]LayerRelation
 }
 
 var _ partial.UncompressedImageCore = (*uncompressedImage)(nil)
@@ -67,8 +70,8 @@ func pathOpener(path string) Opener {
 }
 
 // ImageFromPath returns a v1.Image from a tarball located on path.
-func ImageFromPath(path string, tag *name.Tag, isIncremental bool) (v1.Image, error) {
-	return Image(pathOpener(path), tag, isIncremental)
+func ImageFromPath(path string, tag *name.Tag) (v1.Image, error) {
+	return Image(pathOpener(path), tag)
 }
 
 // LoadManifest load manifest
@@ -88,42 +91,34 @@ func LoadManifest(opener Opener) (Manifest, error) {
 }
 
 // Image exposes an image from the tarball at the provided path.
-func Image(opener Opener, tag *name.Tag, isIncremental bool) (v1.Image, error) {
+func Image(opener Opener, tag *name.Tag) (v1.Image, error) {
 	img := &image{
 		opener: opener,
 		tag:    tag,
 	}
 
-	if isIncremental {
-		// when pushing incremental packages, set the rawManifest
-		if err := img.loadTarManifestAndConfig(); err != nil {
+	// set manifest under normal circumstances
+	if err := img.loadTarDescriptorAndConfig(); err != nil {
+		return nil, err
+	}
+	// Peek at the first layer and see if it's compressed.
+	if len(img.imgDescriptor.Layers) > 0 {
+		compressed, err := img.areLayersCompressed()
+		if err != nil {
 			return nil, err
 		}
-	} else {
-		// set manifest under normal circumstances
-		if err := img.loadTarDescriptorAndConfig(); err != nil {
-			return nil, err
-		}
-		// Peek at the first layer and see if it's compressed.
-		if len(img.imgDescriptor.Layers) > 0 {
-			compressed, err := img.areLayersCompressed()
-			if err != nil {
-				return nil, err
+		if compressed {
+			c := compressedImage{
+				image: img,
 			}
-			if compressed {
-				c := compressedImage{
-					image: img,
-				}
-				return partial.CompressedToImage(&c)
-			}
+			return partial.CompressedToImage(&c)
 		}
-
 	}
 
 	uc := uncompressedImage{
 		image: img,
 	}
-	return partial.UncompressedToImage(&uc, img.rawManifest)
+	return partial.UncompressedToImage(&uc)
 }
 
 func (i *image) MediaType() (types.MediaType, error) {
@@ -171,6 +166,20 @@ func (i *image) areLayersCompressed() (bool, error) {
 		return false, errors.New("0 layers found in image")
 	}
 	layer := i.imgDescriptor.Layers[0]
+
+	mountable, err := extractFileFromTar(i.opener, "mountable.json")
+	if err == nil {
+		defer mountable.Close()
+		mount := make(map[string]LayerRelation, 0)
+		if err := json.NewDecoder(mountable).Decode(&mount); err != nil {
+			return false, err
+		}
+		items := strings.Split(strings.TrimSpace(layer), "/")
+		if _, ok := mount[items[0]]; ok {
+			return true, err
+		}
+	}
+
 	blob, err := extractFileFromTar(i.opener, layer)
 	if err != nil {
 		return false, err
@@ -382,6 +391,15 @@ func (c *compressedImage) Manifest() (*v1.Manifest, error) {
 		},
 	}
 
+	c.mount = make(map[string]LayerRelation, 0)
+	mountable, err := extractFileFromTar(c.opener, "mountable.json")
+	if err == nil {
+		defer mountable.Close()
+		if err := json.NewDecoder(mountable).Decode(&c.mount); err != nil {
+			return nil, err
+		}
+	}
+
 	for i, p := range c.imgDescriptor.Layers {
 		cfg, err := partial.ConfigFile(c)
 		if err != nil {
@@ -393,6 +411,24 @@ func (c *compressedImage) Manifest() (*v1.Manifest, error) {
 			// reading the entire file.
 			c.manifest.Layers = append(c.manifest.Layers, d)
 		} else {
+			flag := false
+			items := strings.Split(strings.TrimSpace(p), "/")
+			if v, exist := c.mount[items[0]]; exist {
+				flag = true
+				c.manifest.Layers = append(c.manifest.Layers, v1.Descriptor{
+					MediaType: types.DockerLayer,
+					Size:      v.Size,
+					Digest: v1.Hash{
+						Algorithm: "sha256",
+						Hex:       items[0],
+					},
+				})
+			}
+
+			if flag {
+				continue
+			}
+
 			l, err := extractFileFromTar(c.opener, p)
 			if err != nil {
 				return nil, err
@@ -459,4 +495,42 @@ func (c *compressedImage) LayerByDigest(h v1.Hash) (partial.CompressedLayer, err
 		}
 	}
 	return nil, fmt.Errorf("blob %v not found", h)
+}
+
+func (c *compressedImage) LayerByMountable(h v1.Hash) (v1.Layer, bool, error) {
+	// under normal circumstances, c.mount has been initialized in Manifest().
+	if len(c.mount) != 0 {
+		return c.getMountableLayer(h)
+	}
+
+	c.mount = make(map[string]LayerRelation, 0)
+	mountable, err := extractFileFromTar(c.opener, "mountable.json")
+	if err != nil {
+		return nil, false, err
+	}
+	defer mountable.Close()
+
+	if err := json.NewDecoder(mountable).Decode(&c.mount); err != nil {
+		return nil, false, err
+	}
+	return c.getMountableLayer(h)
+}
+
+func (c *compressedImage) getMountableLayer(h v1.Hash) (v1.Layer, bool, error) {
+	if v, ok := c.mount[h.Hex]; ok {
+		tag, err := name.NewTag(v.ImageName)
+		if err != nil {
+			return nil, false, err
+		}
+		return &remote.MountableLayer{
+			Layer: &layer{
+				digest:    h,
+				size:      v.Size,
+				mediaType: types.DockerLayer,
+			},
+			Reference: tag,
+		}, true, nil
+	}
+
+	return nil, false, fmt.Errorf("layer %v not found", h)
 }

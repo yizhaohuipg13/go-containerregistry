@@ -89,7 +89,7 @@ func TestWriteImage(t *testing.T) {
 		wantErr: "goodbye, world",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			image, err := tarball.ImageFromPath("../tarball/testdata/test_image_1.tar", nil, false)
+			image, err := tarball.ImageFromPath("../tarball/testdata/test_image_1.tar", nil)
 			if err != nil {
 				t.Errorf("Error loading image: %v", err.Error())
 			}

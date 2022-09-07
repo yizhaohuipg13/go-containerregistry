@@ -32,7 +32,7 @@ func Load(path string, opt ...Option) (v1.Image, error) {
 // If tag is "", will attempt to read the tarball as a single image.
 func LoadTag(path, tag string, opt ...Option) (v1.Image, error) {
 	if tag == "" {
-		return tarball.ImageFromPath(path, nil, false)
+		return tarball.ImageFromPath(path, nil)
 	}
 
 	o := makeOptions(opt...)
@@ -40,7 +40,7 @@ func LoadTag(path, tag string, opt ...Option) (v1.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing tag %q: %w", tag, err)
 	}
-	return tarball.ImageFromPath(path, &t, false)
+	return tarball.ImageFromPath(path, &t)
 }
 
 // Push pushes the v1.Image img to a registry as dst.
@@ -64,44 +64,44 @@ func Upload(layer v1.Layer, repo string, opt ...Option) error {
 	return remote.WriteLayer(ref, layer, o.Remote...)
 }
 
-func PushSingleLayer(tag, tarFile string, opt ...Option) error {
-	o := makeOptions(opt...)
-	t, err := name.NewTag(tag, o.Name...)
-	if err != nil {
-		return fmt.Errorf("parsing tag %q: %w", tag, err)
-	}
-
-	remoteImage, err := remote.Image(t, o.Remote...)
-	if err != nil {
-		return fmt.Errorf("remote.Image(): %v", err)
-	}
-	if remoteImage == nil {
-		remoteImage, err = tarball.ImageFromPath(tarFile, nil, false)
-		if err != nil {
-			return fmt.Errorf("load tarball image: %v", err)
-		}
-		return remote.Write(t, remoteImage, o.Remote...)
-	}
-
-	rLayer, err := remoteImage.Layers()
-	if err != nil {
-		return fmt.Errorf("faild to get remote image: %v", err)
-	}
-
-	localImage, err := tarball.ImageFromPath(tarFile, nil, true)
-	if err != nil {
-		return err
-	}
-
-	ls, err := tarball.LayerFromPath(tarFile)
-	if err != nil {
-		return err
-	}
-
-	layerSet, err := tarball.DedupLayer(rLayer, ls)
-	if err != nil {
-		return fmt.Errorf("dedup layers error:%v", err)
-	}
-	o.Remote = append(o.Remote, remote.WithLayerSet(layerSet))
-	return remote.Write(t, localImage, o.Remote...)
-}
+//func PushSingleLayer(tag, tarFile string, opt ...Option) error {
+//	o := makeOptions(opt...)
+//	t, err := name.NewTag(tag, o.Name...)
+//	if err != nil {
+//		return fmt.Errorf("parsing tag %q: %w", tag, err)
+//	}
+//
+//	remoteImage, err := remote.Image(t, o.Remote...)
+//	if err != nil {
+//		return fmt.Errorf("remote.Image(): %v", err)
+//	}
+//	if remoteImage == nil {
+//		remoteImage, err = tarball.ImageFromPath(tarFile, nil)
+//		if err != nil {
+//			return fmt.Errorf("load tarball image: %v", err)
+//		}
+//		return remote.Write(t, remoteImage, o.Remote...)
+//	}
+//
+//	rLayer, err := remoteImage.Layers()
+//	if err != nil {
+//		return fmt.Errorf("faild to get remote image: %v", err)
+//	}
+//
+//	localImage, err := tarball.ImageFromPath(tarFile, nil)
+//	if err != nil {
+//		return err
+//	}
+//
+//	ls, err := tarball.LayerFromPath(tarFile)
+//	if err != nil {
+//		return err
+//	}
+//
+//	layerSet, err := tarball.DedupLayer(rLayer, ls)
+//	if err != nil {
+//		return fmt.Errorf("dedup layers error:%v", err)
+//	}
+//	o.Remote = append(o.Remote, remote.WithLayerSet(layerSet))
+//	return remote.Write(t, localImage, o.Remote...)
+//}

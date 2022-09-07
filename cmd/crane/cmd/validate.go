@@ -69,5 +69,5 @@ func NewCmdValidate(options *[]crane.Option) *cobra.Command {
 }
 
 func makeTarball(path string, _ ...crane.Option) (v1.Image, error) {
-	return tarball.ImageFromPath(path, nil, false)
+	return tarball.ImageFromPath(path, nil)
 }

@@ -17,7 +17,6 @@ package tarball
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -43,6 +42,13 @@ type layer struct {
 	estgzopts          []estargz.Option
 	mediaType          types.MediaType
 }
+
+type LayerRelation struct {
+	Size      int64  `json:"size"`
+	ImageName string `json:"imageName"`
+}
+
+type MountableLayerRelation map[string]LayerRelation
 
 // Descriptor implements partial.withDescriptor.
 func (l *layer) Descriptor() (*v1.Descriptor, error) {
@@ -296,79 +302,79 @@ func computeDiffID(opener Opener) (v1.Hash, error) {
 	return digest, err
 }
 
-func LayerFromPath(path string) ([]v1.Layer, error) {
-	return GetLayerFromPath(pathOpener(path))
-}
-
-func GetLayerFromPath(opener Opener) ([]v1.Layer, error) {
-	var ls []v1.Layer
-	dgsts, err := extractFileFromTar(opener, "digests.json")
-	if err != nil {
-		return nil, err
-	}
-	defer dgsts.Close()
-
-	var digests []string
-	if err := json.NewDecoder(dgsts).Decode(&digests); err != nil {
-		return nil, err
-	}
-
-	for _, d := range digests {
-		dt := fmt.Sprintf("%s.tar.gz", d)
-		op := func() (io.ReadCloser, error) {
-			lTar, err := extractFileFromTar(opener, dt)
-			if err != nil {
-				return nil, err
-			}
-
-			return lTar, nil
-		}
-
-		l, err := LayerFromOpener(op)
-		if err != nil {
-			return nil, err
-		}
-		ls = append(ls, l)
-	}
-	if len(ls) == 0 {
-		return nil, fmt.Errorf("the layer obtained by tar is empty")
-	}
-	return ls, nil
-}
-
-func DedupLayer(remoteLayers, localLayers []v1.Layer) (map[v1.Layer]bool, error) {
-	layerSet := make(map[v1.Layer]bool)
-	tmpLayerSet := make(map[string]map[v1.Layer]bool)
-
-	// The types of the two layers are different
-	// Need to judge by digest
-	for _, rLayer := range remoteLayers {
-		d, err := rLayer.Digest()
-		if err != nil {
-			return nil, err
-		}
-		// The default is that the layer already exists in the target registry.
-		tmpLayerSet[d.Hex] = map[v1.Layer]bool{rLayer: true}
-	}
-
-	for _, l := range localLayers {
-		d, err := l.Digest()
-		if err != nil {
-			return nil, err
-		}
-
-		if _, ok := tmpLayerSet[d.Hex]; !ok {
-			tmpLayerSet[d.Hex] = map[v1.Layer]bool{l: false}
-		}
-	}
-
-	for _, l := range tmpLayerSet {
-		for layer, ok := range l {
-			if !ok {
-				layerSet[layer] = false
-			}
-		}
-	}
-
-	return layerSet, nil
-}
+//func LayerFromPath(path string) ([]v1.Layer, error) {
+//	return GetLayerFromPath(pathOpener(path))
+//}
+//
+//func GetLayerFromPath(opener Opener) ([]v1.Layer, error) {
+//	var ls []v1.Layer
+//	dgsts, err := extractFileFromTar(opener, "digests.json")
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer dgsts.Close()
+//
+//	var digests []string
+//	if err := json.NewDecoder(dgsts).Decode(&digests); err != nil {
+//		return nil, err
+//	}
+//
+//	for _, d := range digests {
+//		dt := fmt.Sprintf("%s.tar.gz", d)
+//		op := func() (io.ReadCloser, error) {
+//			lTar, err := extractFileFromTar(opener, dt)
+//			if err != nil {
+//				return nil, err
+//			}
+//
+//			return lTar, nil
+//		}
+//
+//		l, err := LayerFromOpener(op)
+//		if err != nil {
+//			return nil, err
+//		}
+//		ls = append(ls, l)
+//	}
+//	if len(ls) == 0 {
+//		return nil, fmt.Errorf("the layer obtained by tar is empty")
+//	}
+//	return ls, nil
+//}
+//
+//func DedupLayer(remoteLayers, localLayers []v1.Layer) (map[v1.Layer]bool, error) {
+//	layerSet := make(map[v1.Layer]bool)
+//	tmpLayerSet := make(map[string]map[v1.Layer]bool)
+//
+//	// The types of the two layers are different
+//	// Need to judge by digest
+//	for _, rLayer := range remoteLayers {
+//		d, err := rLayer.Digest()
+//		if err != nil {
+//			return nil, err
+//		}
+//		// The default is that the layer already exists in the target registry.
+//		tmpLayerSet[d.Hex] = map[v1.Layer]bool{rLayer: true}
+//	}
+//
+//	for _, l := range localLayers {
+//		d, err := l.Digest()
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		if _, ok := tmpLayerSet[d.Hex]; !ok {
+//			tmpLayerSet[d.Hex] = map[v1.Layer]bool{l: false}
+//		}
+//	}
+//
+//	for _, l := range tmpLayerSet {
+//		for layer, ok := range l {
+//			if !ok {
+//				layerSet[layer] = false
+//			}
+//		}
+//	}
+//
+//	return layerSet, nil
+//}

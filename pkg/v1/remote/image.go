@@ -246,3 +246,7 @@ func (r *remoteImage) LayerByDigest(h v1.Hash) (partial.CompressedLayer, error) 
 		digest: h,
 	}, nil
 }
+
+func (r *remoteImage) LayerByMountable(h v1.Hash) (v1.Layer, bool, error) {
+	return nil, false, nil
+}

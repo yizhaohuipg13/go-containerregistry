@@ -76,17 +76,8 @@ func MultiSave(imgMap map[string]v1.Image, path string, opt ...Option) error {
 		tagToImage[tag] = img
 	}
 
-	nameToDigest := make(map[string]string, 0)
-	var err error
-	if len(o.LayerSet) != 0 {
-		nameToDigest, err = getDigestByImageName(o.LayerSet, o)
-		if err != nil {
-			return fmt.Errorf("faild to get digest by image name: %v", err)
-		}
-	}
-
 	// no progress channel (for now)
-	return tarball.MultiWriteToFile(path, tagToImage, o.LayerSet, nameToDigest)
+	return tarball.MultiWriteToFile(path, tagToImage, o.LayerSet)
 }
 
 func getDigestByImageName(layerSet map[string]string, option Options) (map[string]string, error) {
@@ -98,6 +89,7 @@ func getDigestByImageName(layerSet map[string]string, option Options) (map[strin
 		}
 		digest, err := remote.Get(tag, option.Remote...)
 		if err != nil {
+			// It is an error if layerSet.imageName does not exist in remote
 			return nil, err
 		}
 		nameToDigest[v] = digest.Digest.Hex

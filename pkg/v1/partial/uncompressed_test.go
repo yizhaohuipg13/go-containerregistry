@@ -153,7 +153,7 @@ func TestLegacyWrite(t *testing.T) {
 	// Make sure the image is valid and can be loaded.
 	// Load it both by nil and by its name.
 	for _, it := range []*name.Tag{nil, &tag} {
-		tarImage, err := tarball.ImageFromPath(fp.Name(), it, false)
+		tarImage, err := tarball.ImageFromPath(fp.Name(), it)
 		if err != nil {
 			t.Fatalf("Unexpected error reading tarball: %v", err)
 		}
@@ -170,7 +170,7 @@ func TestLegacyWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error generating tag: %v", err)
 	}
-	if _, err := tarball.ImageFromPath(fp.Name(), &fakeTag, false); err == nil {
+	if _, err := tarball.ImageFromPath(fp.Name(), &fakeTag); err == nil {
 		t.Errorf("Expected error loading tag %v from image", fakeTag)
 	}
 }
@@ -203,7 +203,7 @@ func TestUncompressed(t *testing.T) {
 
 	core := &uncompressedImage{rnd}
 
-	img, err := partial.UncompressedToImage(core, nil)
+	img, err := partial.UncompressedToImage(core)
 	if err != nil {
 		t.Fatal(err)
 	}

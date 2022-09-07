@@ -23,7 +23,7 @@ import (
 )
 
 // Image is a singleton empty image, think: FROM scratch.
-var Image, _ = partial.UncompressedToImage(emptyImage{}, &v1.Manifest{})
+var Image, _ = partial.UncompressedToImage(emptyImage{})
 
 type emptyImage struct{}
 
