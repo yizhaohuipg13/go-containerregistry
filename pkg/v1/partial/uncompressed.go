@@ -188,6 +188,9 @@ func (i *uncompressedImageExtender) ConfigFile() (*v1.ConfigFile, error) {
 
 // Layers implements v1.Image
 func (i *uncompressedImageExtender) Layers() ([]v1.Layer, error) {
+	// If the image is of uncompressedImageCore type,
+	// it means that the layer is all tar.gz and needs to be uploaded in full,
+	// without reading mountable.json
 	diffIDs, err := DiffIDs(i)
 	if err != nil {
 		return nil, err

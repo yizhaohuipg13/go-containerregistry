@@ -15,6 +15,7 @@
 package partial
 
 import (
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
@@ -25,4 +26,8 @@ type ImageCore interface {
 
 	// MediaType of this image's manifest.
 	MediaType() (types.MediaType, error)
+}
+
+type WithMountableLayer interface {
+	LayerByMountable(h v1.Hash) (v1.Layer, bool, error)
 }

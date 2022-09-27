@@ -96,6 +96,8 @@ func CompressedToLayer(ul CompressedLayer) (v1.Layer, error) {
 type CompressedImageCore interface {
 	ImageCore
 
+	WithMountableLayer
+
 	// RawManifest returns the serialized bytes of the manifest.
 	RawManifest() ([]byte, error)
 
@@ -129,15 +131,26 @@ func (i *compressedImageExtender) Layers() ([]v1.Layer, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	ls := make([]v1.Layer, 0, len(hs))
 	for _, h := range hs {
-		l, err := i.LayerByDigest(h)
-		if err != nil {
-			return nil, err
+		// Only ok means that the layer is successfully obtained from mountable.json
+		// the false means that other layers need to be obtained from the tar archive.
+		l, ok, err := i.LayerByMountable(h)
+		if !ok {
+			l, err = i.LayerByDigest(h)
+			if err != nil {
+				return nil, err
+			}
 		}
+
 		ls = append(ls, l)
 	}
 	return ls, nil
+}
+
+func (i *compressedImageExtender) LayerByMountable(h v1.Hash) (v1.Layer, bool, error) {
+	return i.CompressedImageCore.LayerByMountable(h)
 }
 
 // LayerByDigest implements v1.Image

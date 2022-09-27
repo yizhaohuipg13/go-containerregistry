@@ -102,7 +102,7 @@ func TestImage(t *testing.T) {
 			} else {
 				opts = append(opts, WithUnbufferedOpener())
 			}
-			img, err := tarball.ImageFromPath(imagePath, nil)
+			img, err := tarball.ImageFromPath(imagePath, nil, false)
 			if err != nil {
 				t.Fatalf("error loading test image: %s", err)
 			}
