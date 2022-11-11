@@ -43,7 +43,7 @@ func Write(tag name.Tag, img v1.Image, options ...Option) (string, error) {
 
 	pr, pw := io.Pipe()
 	go func() {
-		pw.CloseWithError(tarball.Write(tag, img, pw))
+		pw.CloseWithError(tarball.Write(tag, img, pw, map[string]string{}))
 	}()
 
 	// write the image in docker save format first, then load it
