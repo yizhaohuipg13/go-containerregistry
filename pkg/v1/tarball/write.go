@@ -40,7 +40,7 @@ func WriteToFile(p string, ref name.Reference, img v1.Image, opts ...WriteOption
 	}
 	defer w.Close()
 
-	return Write(ref, img, w, opts...)
+	return Write(ref, img, w, map[string]string{}, opts...)
 }
 
 // MultiWriteToFile writes in the compressed format to a tarball, on disk.
@@ -67,8 +67,8 @@ func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, layer
 }
 
 // Write is a wrapper to write a single image and tag to a tarball.
-func Write(ref name.Reference, img v1.Image, w io.Writer, opts ...WriteOption) error {
-	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, map[string]string{}, opts...)
+func Write(ref name.Reference, img v1.Image, w io.Writer, layerSet map[string]string, opts ...WriteOption) error {
+	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, layerSet, opts...)
 }
 
 // MultiWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -326,6 +326,12 @@ func calculateManifest(refToImage map[name.Reference]v1.Image) (m Manifest, err 
 	})
 
 	return m, nil
+}
+
+// CalculateSizeByLayerSet calculates the expected size of the output tar file by layerSet
+func CalculateSizeByLayerSet(refToImage map[name.Reference]v1.Image, o *writeOptions) (size int64, err error) {
+	size, _, err = getSizeAndManifest(refToImage, o)
+	return size, err
 }
 
 // CalculateSize calculates the expected complete size of the output tar file
