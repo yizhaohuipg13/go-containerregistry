@@ -224,19 +224,23 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			if err != nil {
 				return sendProgressWriterReturn(pw, err)
 			}
+			flag := true
 			for _, n := range names {
-				if o.layerWritten(hex, n) {
+				if o.layerWritten != nil && o.layerWritten(hex, n) {
 					o.configOrLayerResp <- ConfigOrLayerReaderResp{
 						FileName: layerFiles[i],
 						Size:     blobSize,
 						Reader:   r,
 					}
+					flag = false
 					break
 				}
 			}
 
-			if err := writeTarEntry(tf, layerFiles[i], r, blobSize); err != nil {
-				return sendProgressWriterReturn(pw, err)
+			if flag {
+				if err := writeTarEntry(tf, layerFiles[i], r, blobSize); err != nil {
+					return sendProgressWriterReturn(pw, err)
+				}
 			}
 		}
 
@@ -437,7 +441,7 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 		size += calculateSingleFileInTarSize(manifest.Config.Size)
 		for _, l := range manifest.Layers {
 			if o.layerSet != nil {
-				if v, ok := o.layerSet[l.Digest.String()]; !ok {
+				if v, ok := o.layerSet[l.Digest.Hex]; !ok {
 					size += calculateSingleFileInTarSize(l.Size)
 				} else {
 					mounts[l.Digest.Hex] = LayerRelation{
@@ -480,7 +484,7 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 		for _, l := range manifest.Layers {
 			flag := true
 			if o.layerSet != nil {
-				if v, ok := o.layerSet[l.Digest.String()]; !ok {
+				if v, ok := o.layerSet[l.Digest.Hex]; !ok {
 					size += calculateSingleFileInTarSize(l.Size)
 					flag = false
 				} else {
@@ -493,7 +497,7 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 
 			if flag {
 				for _, n := range ns {
-					if o.layerWritten(l.Digest.Hex, n) {
+					if o.layerWritten != nil && o.layerWritten(l.Digest.Hex, n) {
 						flag = false // layerSet中没有计算(或layerSet==nil),但又处于layerWritten中,就不需要下面的计算步骤
 						break
 					}
