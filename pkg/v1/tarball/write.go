@@ -152,7 +152,7 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 
 	seenLayerDigests := make(map[string]struct{})
 
-	for img := range imageToTags {
+	for img, names := range imageToTags {
 		// Write the config.
 		cfgName, err := img.ConfigName()
 		if err != nil {
@@ -223,6 +223,16 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			blobSize, err := l.Size()
 			if err != nil {
 				return sendProgressWriterReturn(pw, err)
+			}
+			for _, n := range names {
+				if o.layerWritten(hex, n) {
+					o.configOrLayerResp <- ConfigOrLayerReaderResp{
+						FileName: layerFiles[i],
+						Size:     blobSize,
+						Reader:   r,
+					}
+					break
+				}
 			}
 
 			if err := writeTarEntry(tf, layerFiles[i], r, blobSize); err != nil {
@@ -340,6 +350,19 @@ func CalculateSize(refToImage map[name.Reference]v1.Image) (size int64, err erro
 	return size, err
 }
 
+// CalculateSizeWithResult 计算经过layerSet和layerWritten后包大小
+func CalculateSizeWithResult(refToImage map[name.Reference]v1.Image, o *writeOptions) (size int64, err error) {
+	m, err := calculateManifest(refToImage)
+	if err != nil {
+		return 0, fmt.Errorf("unable to calculate manifest: %w", err)
+	}
+	mBytes, err := json.Marshal(m)
+	if err != nil {
+		return 0, fmt.Errorf("could not marshall manifest to bytes: %w", err)
+	}
+	return calculateTarballSizeWithResult(refToImage, mBytes, o)
+}
+
 func getSizeAndManifest(refToImage map[name.Reference]v1.Image, o *writeOptions) (int64, []byte, error) {
 	m, err := calculateManifest(refToImage)
 	if err != nil {
@@ -425,6 +448,60 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 	return size, nil
 }
 
+func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mBytes []byte, o *writeOptions) (size int64, err error) {
+	imageToTags := dedupRefToImage(refToImage)
+	mounts := make(map[string]LayerRelation, 0)
+
+	for img, ns := range imageToTags {
+		manifest, err := img.Manifest()
+		if err != nil {
+			return size, fmt.Errorf("unable to get manifest for img %s: %w", ns, err)
+		}
+		size += calculateSingleFileInTarSize(manifest.Config.Size)
+		for _, l := range manifest.Layers {
+			flag := true
+			if o.layerSet != nil {
+				if v, ok := o.layerSet[l.Digest.String()]; !ok {
+					size += calculateSingleFileInTarSize(l.Size)
+					flag = false
+				} else {
+					mounts[l.Digest.Hex] = LayerRelation{
+						Size:      l.Size,
+						ImageName: v,
+					}
+				}
+			}
+
+			if flag {
+				for _, n := range ns {
+					if o.layerWritten(l.Digest.Hex, n) {
+						flag = false // layerSet中没有计算(或layerSet==nil),但又处于layerWritten中,就不需要下面的计算步骤
+						break
+					}
+				}
+			}
+
+			if flag {
+				// layer既不存在layerSet中,又不存在layerWritten中
+				size += calculateSingleFileInTarSize(l.Size)
+			}
+		}
+	}
+	// add the manifest
+	size += calculateSingleFileInTarSize(int64(len(mBytes)))
+
+	// add mountable.json
+	mountBytes, err := json.Marshal(mounts)
+	if err != nil {
+		return size, fmt.Errorf("withResult failed to calculate the size of the mountable in , err:%v", err)
+	}
+	size += calculateSingleFileInTarSize(int64(len(mountBytes)))
+
+	// add the two padding blocks that indicate end of a tar file
+	size += 1024
+	return size, nil
+}
+
 func dedupRefToImage(refToImage map[name.Reference]v1.Image) map[v1.Image][]string {
 	imageToTags := make(map[v1.Image][]string)
 
@@ -478,8 +555,17 @@ func ComputeManifest(refToImage map[name.Reference]v1.Image) (Manifest, error) {
 // WriteOption a function option to pass to Write()
 type WriteOption func(*writeOptions) error
 type writeOptions struct {
-	updates  chan<- v1.Update
-	layerSet map[string]string // example "23858da423a6737f0467fab0014e5b53009ea7405d575636af0c3f100bbb2f10" : "docker.io/debian:latest"
+	updates           chan<- v1.Update
+	layerSet          map[string]string // example "23858da423a6737f0467fab0014e5b53009ea7405d575636af0c3f100bbb2f10" : "docker.io/debian:latest"
+	layerWritten      LayerWritten      // 如果layer同时出现在layerSet和layerWritten中,优先处理layerSet
+	configOrLayerResp chan<- ConfigOrLayerReaderResp
+}
+
+type LayerWritten func(layerId, imageName string) bool
+type ConfigOrLayerReaderResp struct {
+	FileName string
+	Size     int64
+	Reader   io.ReadCloser
 }
 
 // WithProgress create a WriteOption for passing to Write() that enables
