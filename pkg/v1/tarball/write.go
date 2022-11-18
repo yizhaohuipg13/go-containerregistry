@@ -369,7 +369,6 @@ func CalculateSizeWithResult(refToImage map[name.Reference]v1.Image, opts ...Wri
 		}
 	}
 
-func CalculateSizeWithResult(refToImage map[name.Reference]v1.Image, o *writeOptions) (size int64, err error) {
 	m, err := calculateManifest(refToImage)
 	if err != nil {
 		return 0, fmt.Errorf("unable to calculate manifest: %w", err)
@@ -455,11 +454,13 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 	size += calculateSingleFileInTarSize(int64(len(mBytes)))
 
 	// add mountable.json
-	mountBytes, err := json.Marshal(mounts)
-	if err != nil {
-		return size, fmt.Errorf("failed to calculate the size of the mountable, err:%v", err)
+	if len(mounts) > 0 { // 由于是json,内容为空时也会有两个{}占字节
+		mountBytes, err := json.Marshal(mounts)
+		if err != nil {
+			return size, fmt.Errorf("failed to calculate the size of the mountable, err:%v", err)
+		}
+		size += calculateSingleFileInTarSize(int64(len(mountBytes)))
 	}
-	size += calculateSingleFileInTarSize(int64(len(mountBytes)))
 
 	// add the two padding blocks that indicate end of a tar file
 	size += 1024
@@ -509,11 +510,13 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 	size += calculateSingleFileInTarSize(int64(len(mBytes)))
 
 	// add mountable.json
-	mountBytes, err := json.Marshal(mounts)
-	if err != nil {
-		return size, fmt.Errorf("withResult failed to calculate the size of the mountable in , err:%v", err)
+	if len(mounts) > 0 {
+		mountBytes, err := json.Marshal(mounts)
+		if err != nil {
+			return size, fmt.Errorf("withResult failed to calculate the size of the mountable in , err:%v", err)
+		}
+		size += calculateSingleFileInTarSize(int64(len(mountBytes)))
 	}
-	size += calculateSingleFileInTarSize(int64(len(mountBytes)))
 
 	// add the two padding blocks that indicate end of a tar file
 	size += 1024
@@ -600,6 +603,13 @@ func WithProgress(updates chan<- v1.Update) WriteOption {
 func WithLayerSet(layerSet map[string]string) WriteOption {
 	return func(o *writeOptions) error {
 		o.layerSet = layerSet
+		return nil
+	}
+}
+
+func WithLayerWritten(written LayerWritten) WriteOption {
+	return func(o *writeOptions) error {
+		o.layerWritten = written
 		return nil
 	}
 }
