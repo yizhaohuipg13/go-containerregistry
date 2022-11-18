@@ -369,6 +369,7 @@ func CalculateSizeWithResult(refToImage map[name.Reference]v1.Image, opts ...Wri
 		}
 	}
 
+func CalculateSizeWithResult(refToImage map[name.Reference]v1.Image, o *writeOptions) (size int64, err error) {
 	m, err := calculateManifest(refToImage)
 	if err != nil {
 		return 0, fmt.Errorf("unable to calculate manifest: %w", err)
