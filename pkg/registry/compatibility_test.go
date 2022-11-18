@@ -57,7 +57,7 @@ func TestPushAndPullContainer(t *testing.T) {
 	}
 
 	b := &bytes.Buffer{}
-	if err := tarball.Write(ref, ri, b, map[string]string{}); err != nil {
+	if err := tarball.Write(ref, ri, b); err != nil {
 		t.Fatalf("Error writing image to tarball: %v", err)
 	}
 }

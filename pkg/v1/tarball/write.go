@@ -40,7 +40,7 @@ func WriteToFile(p string, ref name.Reference, img v1.Image, opts ...WriteOption
 	}
 	defer w.Close()
 
-	return Write(ref, img, w, map[string]string{}, opts...)
+	return Write(ref, img, w, opts...)
 }
 
 // MultiWriteToFile writes in the compressed format to a tarball, on disk.
@@ -63,12 +63,12 @@ func MultiRefWriteToFile(p string, refToImage map[name.Reference]v1.Image, layer
 	}
 	defer w.Close()
 
-	return MultiRefWrite(refToImage, w, layerSet, opts...)
+	return MultiRefWrite(refToImage, w, opts...)
 }
 
 // Write is a wrapper to write a single image and tag to a tarball.
-func Write(ref name.Reference, img v1.Image, w io.Writer, layerSet map[string]string, opts ...WriteOption) error {
-	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, layerSet, opts...)
+func Write(ref name.Reference, img v1.Image, w io.Writer, opts ...WriteOption) error {
+	return MultiRefWrite(map[name.Reference]v1.Image{ref: img}, w, opts...)
 }
 
 // MultiWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -81,7 +81,7 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 	for i, d := range tagToImage {
 		refToImage[i] = d
 	}
-	return MultiRefWrite(refToImage, w, map[string]string{}, opts...)
+	return MultiRefWrite(refToImage, w, opts...)
 }
 
 // MultiRefWrite writes the contents of each image to the provided reader, in the compressed format.
@@ -89,11 +89,11 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 // One manifest.json file at the top level containing information about several images.
 // One file for each layer, named after the layer's SHA.
 // One file for the config blob, named after its SHA.
-func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, layerSet map[string]string, opts ...WriteOption) error {
+func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, opts ...WriteOption) error {
 	// process options
 	o := &writeOptions{
 		updates:  nil,
-		layerSet: layerSet,
+		layerSet: nil,
 	}
 	for _, option := range opts {
 		if err := option(o); err != nil {
@@ -387,6 +387,7 @@ func calculateTarballSize(refToImage map[name.Reference]v1.Image, mBytes []byte)
 // calculateTarballSizeWithOptions calculates the size of the tar file with options
 func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBytes []byte, o *writeOptions) (size int64, err error) {
 	imageToTags := dedupRefToImage(refToImage)
+	mounts := make(map[string]LayerRelation, 0)
 
 	for img, n := range imageToTags {
 		manifest, err := img.Manifest()
@@ -396,8 +397,13 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 		size += calculateSingleFileInTarSize(manifest.Config.Size)
 		for _, l := range manifest.Layers {
 			if o.layerSet != nil {
-				if _, ok := o.layerSet[l.Digest.String()]; !ok {
+				if v, ok := o.layerSet[l.Digest.String()]; !ok {
 					size += calculateSingleFileInTarSize(l.Size)
+				} else {
+					mounts[l.Digest.Hex] = LayerRelation{
+						Size:      l.Size,
+						ImageName: v,
+					}
 				}
 			} else {
 				size += calculateSingleFileInTarSize(l.Size)
@@ -406,6 +412,13 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 	}
 	// add the manifest
 	size += calculateSingleFileInTarSize(int64(len(mBytes)))
+
+	// add mountable.json
+	mountBytes, err := json.Marshal(mounts)
+	if err != nil {
+		return size, fmt.Errorf("failed to calculate the size of the mountable, err:%v", err)
+	}
+	size += calculateSingleFileInTarSize(int64(len(mountBytes)))
 
 	// add the two padding blocks that indicate end of a tar file
 	size += 1024
