@@ -224,10 +224,11 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			if err != nil {
 				return sendProgressWriterReturn(pw, err)
 			}
+
 			flag := true
 			for _, n := range names {
-				if o.layerWritten != nil && o.layerWritten(hex, n) {
-					o.configOrLayerResp <- ConfigOrLayerReaderResp{
+				if o.layerWritten != nil && !o.layerWritten(hex, n) { // 不是重复的layer
+					o.layerReaderResp <- &LayerReaderResp{
 						FileName: layerFiles[i],
 						Size:     blobSize,
 						Reader:   r,
@@ -498,7 +499,7 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 			if flag {
 				for _, n := range ns {
 					if o.layerWritten != nil && o.layerWritten(l.Digest.Hex, n) {
-						flag = false // layerSet中没有计算(或layerSet==nil),但又处于layerWritten中,就不需要下面的计算步骤
+						flag = false // layerSet中没有计算(或layerSet==nil),但又处于layerWritten中(重复的layer),就不需要下面的计算步骤
 						break
 					}
 				}
@@ -580,14 +581,14 @@ func ComputeManifest(refToImage map[name.Reference]v1.Image) (Manifest, error) {
 // WriteOption a function option to pass to Write()
 type WriteOption func(*writeOptions) error
 type writeOptions struct {
-	updates           chan<- v1.Update
-	layerSet          map[string]string // example "23858da423a6737f0467fab0014e5b53009ea7405d575636af0c3f100bbb2f10" : "docker.io/debian:latest"
-	layerWritten      LayerWritten      // 如果layer同时出现在layerSet和layerWritten中,优先处理layerSet
-	configOrLayerResp chan<- ConfigOrLayerReaderResp
+	updates         chan<- v1.Update
+	layerSet        map[string]string // example "23858da423a6737f0467fab0014e5b53009ea7405d575636af0c3f100bbb2f10" : "docker.io/debian:latest"
+	layerWritten    LayerWritten      // 如果layer同时出现在layerSet和layerWritten中,优先处理layerSet
+	layerReaderResp chan *LayerReaderResp
 }
 
 type LayerWritten func(layerId, imageName string) bool
-type ConfigOrLayerReaderResp struct {
+type LayerReaderResp struct {
 	FileName string
 	Size     int64
 	Reader   io.ReadCloser
@@ -614,6 +615,13 @@ func WithLayerSet(layerSet map[string]string) WriteOption {
 func WithLayerWritten(written LayerWritten) WriteOption {
 	return func(o *writeOptions) error {
 		o.layerWritten = written
+		return nil
+	}
+}
+
+func WithLayerReaderResp(layerReaderResp chan *LayerReaderResp) WriteOption {
+	return func(o *writeOptions) error {
+		o.layerReaderResp = layerReaderResp
 		return nil
 	}
 }
