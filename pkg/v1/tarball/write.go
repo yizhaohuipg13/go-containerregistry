@@ -225,6 +225,7 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 				return sendProgressWriterReturn(pw, err)
 			}
 
+			fmt.Println("---", hex)
 			flag := true
 			for _, n := range names {
 				if o.layerWritten != nil && !o.layerWritten(hex, n) { // 不是重复的layer
@@ -233,6 +234,7 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 						Size:     blobSize,
 						Reader:   r,
 					}
+					fmt.Printf("开始往chan写值,name:%s,size:%d,reader:%v", layerFiles[i], blobSize, r)
 					flag = false
 					break
 				}
@@ -486,7 +488,7 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 			flag := true
 			if o.layerSet != nil {
 				if v, ok := o.layerSet[l.Digest.Hex]; !ok {
-					size += calculateSingleFileInTarSize(l.Size)
+					// size += calculateSingleFileInTarSize(l.Size)
 					flag = false
 				} else {
 					mounts[l.Digest.Hex] = LayerRelation{
@@ -505,9 +507,9 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 				}
 			}
 
-			if flag {
+			if !flag {
 				// layer既不存在layerSet中,又不存在layerWritten中
-				size += calculateSingleFileInTarSize(l.Size)
+				//size += calculateSingleFileInTarSize(l.Size)
 			}
 		}
 	}
