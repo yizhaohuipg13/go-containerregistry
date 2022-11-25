@@ -225,7 +225,6 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 				return sendProgressWriterReturn(pw, err)
 			}
 
-			fmt.Println("---", hex)
 			flag := true
 			for _, n := range names {
 				if o.layerWritten != nil && !o.layerWritten(hex, n) { // 不是重复的layer
@@ -234,7 +233,6 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 						Size:     blobSize,
 						Reader:   r,
 					}
-					fmt.Printf("开始往chan写值,name:%s,size:%d,reader:%v", layerFiles[i], blobSize, r)
 					flag = false
 					break
 				}
@@ -474,6 +472,7 @@ func calculateTarballSizeWithOptions(refToImage map[name.Reference]v1.Image, mBy
 	return size, nil
 }
 
+// calculateTarballSizeWithResult 只计算config.json & manifest.json & mountable.json(如果存在)
 func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mBytes []byte, o *writeOptions) (size int64, err error) {
 	imageToTags := dedupRefToImage(refToImage)
 	mounts := make(map[string]LayerRelation, 0)
@@ -485,11 +484,12 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 		}
 		size += calculateSingleFileInTarSize(manifest.Config.Size)
 		for _, l := range manifest.Layers {
-			flag := true
+			// flag := true
 			if o.layerSet != nil {
 				if v, ok := o.layerSet[l.Digest.Hex]; !ok {
 					// size += calculateSingleFileInTarSize(l.Size)
-					flag = false
+					// flag = false
+					continue
 				} else {
 					mounts[l.Digest.Hex] = LayerRelation{
 						Size:      l.Size,
@@ -498,19 +498,19 @@ func calculateTarballSizeWithResult(refToImage map[name.Reference]v1.Image, mByt
 				}
 			}
 
-			if flag {
-				for _, n := range ns {
-					if o.layerWritten != nil && o.layerWritten(l.Digest.Hex, n) {
-						flag = false // layerSet中没有计算(或layerSet==nil),但又处于layerWritten中(重复的layer),就不需要下面的计算步骤
-						break
-					}
-				}
-			}
+			//if flag {
+			//	for _, n := range ns {
+			//		if o.layerWritten != nil && o.layerWritten(l.Digest.Hex, n) {
+			//			// flag = false // layerSet中没有计算,也不是重复的layer,移到下个计算步骤
+			//			break
+			//		}
+			//	}
+			//}
 
-			if !flag {
-				// layer既不存在layerSet中,又不存在layerWritten中
-				//size += calculateSingleFileInTarSize(l.Size)
-			}
+			//if !flag {
+			//	// 该layer既不属于layerSet(不是基础镜像layer),也不属于layerWritten(不是重复的)
+			//	size += calculateSingleFileInTarSize(l.Size)
+			//}
 		}
 	}
 	// add the manifest
