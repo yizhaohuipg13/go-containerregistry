@@ -269,6 +269,9 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 	}
 	// send an EOF to indicate finished on the channel, but nil as our return error
 	_ = sendProgressWriterReturn(pw, io.EOF)
+	if o.layerReaderResp != nil {
+		close(o.layerReaderResp)
+	}
 	return nil
 }
 
