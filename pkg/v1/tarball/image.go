@@ -38,12 +38,14 @@ import (
 
 type image struct {
 	opener        Opener
+	dirOpener     DirOpener
 	manifest      *Manifest
 	config        []byte
 	imgDescriptor *Descriptor
 	rawManifest   *v1.Manifest
 
-	tag *name.Tag
+	tag   *name.Tag
+	isDir bool
 }
 
 type uncompressedImage struct {
@@ -62,6 +64,7 @@ var _ partial.CompressedImageCore = (*compressedImage)(nil)
 
 // Opener is a thunk for opening a tar file.
 type Opener func() (io.ReadCloser, error)
+type DirOpener func() (*os.File, error)
 
 func pathOpener(path string) Opener {
 	return func() (io.ReadCloser, error) {
@@ -69,9 +72,20 @@ func pathOpener(path string) Opener {
 	}
 }
 
+func dirPathOpener(path string) DirOpener {
+	return func() (*os.File, error) {
+		return os.Open(path)
+	}
+}
+
 // ImageFromPath returns a v1.Image from a tarball located on path.
 func ImageFromPath(path string, tag *name.Tag) (v1.Image, error) {
 	return Image(pathOpener(path), tag)
+}
+
+func ImageFromPathAndLayerDir(path string, tag *name.Tag, layerDir string) (v1.Image, error) {
+	// return ImageWithLayerDir(path, tag, layerDir)
+	return ImageWithLayerDir(pathOpener(path), tag, dirPathOpener(layerDir))
 }
 
 // LoadManifest load manifest
@@ -104,6 +118,37 @@ func Image(opener Opener, tag *name.Tag) (v1.Image, error) {
 	// Peek at the first layer and see if it's compressed.
 	if len(img.imgDescriptor.Layers) > 0 {
 		compressed, err := img.areLayersCompressed()
+		if err != nil {
+			return nil, err
+		}
+		if compressed {
+			c := compressedImage{
+				image: img,
+			}
+			return partial.CompressedToImage(&c)
+		}
+	}
+
+	uc := uncompressedImage{
+		image: img,
+	}
+	return partial.UncompressedToImage(&uc)
+}
+
+func ImageWithLayerDir(opener Opener, tag *name.Tag, dirOpener DirOpener) (v1.Image, error) {
+	img := &image{
+		opener:    opener,
+		tag:       tag,
+		dirOpener: dirOpener,
+		isDir:     true,
+	}
+
+	if err := img.loadTarDescriptorAndConfig(); err != nil {
+		return nil, err
+	}
+
+	if len(img.imgDescriptor.Layers) > 0 {
+		compressed, err := img.areLayerDirCompressed()
 		if err != nil {
 			return nil, err
 		}
@@ -165,22 +210,57 @@ func (i *image) areLayersCompressed() (bool, error) {
 	if len(i.imgDescriptor.Layers) == 0 {
 		return false, errors.New("0 layers found in image")
 	}
-	layer := i.imgDescriptor.Layers[0]
 
+	mount := make(map[string]LayerRelation, 0)
 	mountable, err := extractFileFromTar(i.opener, "mountable.json")
 	if err == nil {
 		defer mountable.Close()
-		mount := make(map[string]LayerRelation, 0)
 		if err := json.NewDecoder(mountable).Decode(&mount); err != nil {
 			return false, err
 		}
-		items := strings.Split(strings.TrimSpace(layer), "/")
-		if _, ok := mount[items[0]]; ok {
-			return true, err
+	}
+
+	// 得到不属于mountable.json中的layer(1个)
+	// 判断该layer属于已压缩还是未压缩
+	var notMountableLayer string
+	for _, l := range i.imgDescriptor.Layers {
+		items := strings.Split(strings.TrimSpace(l), "/")
+		if _, ok := mount[items[0]]; !ok {
+			notMountableLayer = l
+			break
 		}
 	}
 
-	blob, err := extractFileFromTar(i.opener, layer)
+	blob, err := extractFileFromTar(i.opener, notMountableLayer)
+	if err != nil {
+		return false, err
+	}
+	defer blob.Close()
+	return gzip.Is(blob)
+}
+
+func (i *image) areLayerDirCompressed() (bool, error) {
+	if len(i.imgDescriptor.Layers) == 0 {
+		return false, errors.New("0 layers found in image")
+	}
+
+	mount := make(map[string]LayerRelation, 0)
+	mountable, err := extractFileFromTar(i.opener, "mountable.json")
+	if err == nil {
+		defer mountable.Close()
+		if err := json.NewDecoder(mountable).Decode(&mount); err != nil {
+			return false, err
+		}
+	}
+	var notMountableLayer string
+	for _, l := range i.imgDescriptor.Layers {
+		items := strings.Split(strings.TrimSpace(l), "/")
+		if _, ok := mount[items[0]]; !ok {
+			notMountableLayer = l
+			break
+		}
+	}
+	blob, err := extractFileFromDir(i.dirOpener, notMountableLayer)
 	if err != nil {
 		return false, err
 	}
@@ -294,6 +374,40 @@ func extractFileFromTar(opener Opener, filePath string) (io.ReadCloser, error) {
 		}
 	}
 	return nil, fmt.Errorf("file %s not found in tar", filePath)
+}
+
+func extractFileFromDir(opener DirOpener, filePath string) (io.ReadCloser, error) {
+	f, err := opener()
+	if err != nil {
+		return nil, err
+	}
+	close := true
+	defer func() {
+		if close {
+			f.Close()
+		}
+	}()
+
+	list, err := f.Readdir(-1)
+	if err != nil {
+		return nil, err
+	}
+	for _, info := range list {
+		layerName := fmt.Sprintf("%s/layer.tar", info.Name())
+		if layerName == filePath {
+			layerPath := fmt.Sprintf("%s/%s/layer.tar", f.Name(), info.Name())
+			layerFile, err := os.Open(layerPath)
+			if err != nil {
+				return nil, err
+			}
+			close = false
+			return tarFile{
+				Reader: layerFile,
+				Closer: f,
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("file %s not found in layerDir", filePath)
 }
 
 // uncompressedLayerFromTarball implements partial.UncompressedLayer
@@ -411,10 +525,8 @@ func (c *compressedImage) Manifest() (*v1.Manifest, error) {
 			// reading the entire file.
 			c.manifest.Layers = append(c.manifest.Layers, d)
 		} else {
-			flag := false
 			items := strings.Split(strings.TrimSpace(p), "/")
 			if v, exist := c.mount[items[0]]; exist {
-				flag = true
 				c.manifest.Layers = append(c.manifest.Layers, v1.Descriptor{
 					MediaType: types.DockerLayer,
 					Size:      v.Size,
@@ -423,15 +535,20 @@ func (c *compressedImage) Manifest() (*v1.Manifest, error) {
 						Hex:       items[0],
 					},
 				})
-			}
-
-			if flag {
 				continue
 			}
 
-			l, err := extractFileFromTar(c.opener, p)
-			if err != nil {
-				return nil, err
+			var l io.ReadCloser
+			if c.isDir {
+				l, err = extractFileFromDir(c.dirOpener, p)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				l, err = extractFileFromTar(c.opener, p)
+				if err != nil {
+					return nil, err
+				}
 			}
 			defer l.Close()
 			sha, size, err := v1.SHA256(l)
@@ -454,9 +571,11 @@ func (c *compressedImage) RawManifest() ([]byte, error) {
 
 // compressedLayerFromTarball implements partial.CompressedLayer
 type compressedLayerFromTarball struct {
-	desc     v1.Descriptor
-	opener   Opener
-	filePath string
+	desc      v1.Descriptor
+	opener    Opener
+	dirOpener DirOpener
+	filePath  string
+	isDir     bool
 }
 
 // Digest implements partial.CompressedLayer
@@ -466,7 +585,11 @@ func (clft *compressedLayerFromTarball) Digest() (v1.Hash, error) {
 
 // Compressed implements partial.CompressedLayer
 func (clft *compressedLayerFromTarball) Compressed() (io.ReadCloser, error) {
-	return extractFileFromTar(clft.opener, clft.filePath)
+	if clft.isDir {
+		return extractFileFromDir(clft.dirOpener, clft.filePath)
+	} else {
+		return extractFileFromTar(clft.opener, clft.filePath)
+	}
 }
 
 // MediaType implements partial.CompressedLayer
@@ -488,9 +611,11 @@ func (c *compressedImage) LayerByDigest(h v1.Hash) (partial.CompressedLayer, err
 		if l.Digest == h {
 			fp := c.imgDescriptor.Layers[i]
 			return &compressedLayerFromTarball{
-				desc:     l,
-				opener:   c.opener,
-				filePath: fp,
+				desc:      l,
+				opener:    c.opener,
+				dirOpener: c.dirOpener,
+				filePath:  fp,
+				isDir:     c.isDir,
 			}, nil
 		}
 	}

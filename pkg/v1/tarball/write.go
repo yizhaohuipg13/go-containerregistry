@@ -92,8 +92,10 @@ func MultiWrite(tagToImage map[name.Tag]v1.Image, w io.Writer, opts ...WriteOpti
 func MultiRefWrite(refToImage map[name.Reference]v1.Image, w io.Writer, opts ...WriteOption) error {
 	// process options
 	o := &writeOptions{
-		updates:  nil,
-		layerSet: nil,
+		updates:         nil,
+		layerSet:        nil,
+		layerWritten:    nil,
+		layerReaderResp: nil,
 	}
 	for _, option := range opts {
 		if err := option(o); err != nil {
@@ -119,7 +121,11 @@ func sendUpdateReturn(o *writeOptions, err error) error {
 }
 
 // sendProgressWriterReturn return the passed in error message, also sending on update channel, if it exists, along with downloaded information
-func sendProgressWriterReturn(pw *progressWriter, err error) error {
+func sendProgressWriterReturn(pw *progressWriter, layerReaderResp chan *LayerReaderResp, err error) error {
+	// 如果layer写入channel之前有报错,在此处关闭layerReaderResp,防止调用方一直堵塞
+	if layerReaderResp != nil {
+		close(layerReaderResp)
+	}
 	if pw != nil {
 		return pw.Error(err)
 	}
@@ -156,15 +162,15 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 		// Write the config.
 		cfgName, err := img.ConfigName()
 		if err != nil {
-			return sendProgressWriterReturn(pw, err)
+			return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 		}
 		cfgBlob, err := img.RawConfigFile()
 		if err != nil {
-			return sendProgressWriterReturn(pw, err)
+			return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 		}
 
 		if err := writeTarEntry(tf, cfgName.String(), bytes.NewReader(cfgBlob), int64(len(cfgBlob))); err != nil {
-			return sendProgressWriterReturn(pw, err)
+			return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 		}
 
 		mounts := make(map[string]LayerRelation, 0)
@@ -172,13 +178,13 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 		// Write the layers.
 		layers, err := img.Layers()
 		if err != nil {
-			return sendProgressWriterReturn(pw, err)
+			return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 		}
 		layerFiles := make([]string, len(layers))
 		for i, l := range layers {
 			d, err := l.Digest()
 			if err != nil {
-				return sendProgressWriterReturn(pw, err)
+				return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 			}
 			// Munge the file name to appease ancient technology.
 			//
@@ -218,29 +224,31 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 
 			r, err := l.Compressed()
 			if err != nil {
-				return sendProgressWriterReturn(pw, err)
+				return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 			}
 			blobSize, err := l.Size()
 			if err != nil {
-				return sendProgressWriterReturn(pw, err)
+				return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 			}
 
-			flag := true
-			for _, n := range names {
-				if o.layerWritten != nil && !o.layerWritten(hex, n) { // 不是重复的layer
-					o.layerReaderResp <- &LayerReaderResp{
-						FileName: layerFiles[i],
-						Size:     blobSize,
-						Reader:   r,
+			layerWrittenFlag := true
+			if o.layerWritten != nil && o.layerReaderResp != nil {
+				layerWrittenFlag = false
+				for _, n := range names {
+					if !o.layerWritten(hex, n) { // 不是重复的layer
+						o.layerReaderResp <- &LayerReaderResp{
+							FileName: layerFiles[i],
+							Size:     blobSize,
+							Reader:   r,
+						}
 					}
-					flag = false
-					break
+					break // 不是重复的layer已经处理了,是重复的layer也不需要再次写入tar包,直接break
 				}
 			}
 
-			if flag {
+			if layerWrittenFlag {
 				if err := writeTarEntry(tf, layerFiles[i], r, blobSize); err != nil {
-					return sendProgressWriterReturn(pw, err)
+					return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 				}
 			}
 		}
@@ -251,27 +259,24 @@ func writeImagesToTar(refToImage map[name.Reference]v1.Image, m []byte, size int
 			// write to this file even if mount is nil
 			mBytes, err := json.Marshal(mounts)
 			if err != nil {
-				return sendProgressWriterReturn(pw, err)
+				return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 			}
 			if err := writeTarEntry(tf, "mountable.json", bytes.NewReader(mBytes), int64(len(mBytes))); err != nil {
-				return sendProgressWriterReturn(pw, err)
+				return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 			}
 		}
 	}
 
 	if err := writeTarEntry(tf, "manifest.json", bytes.NewReader(m), int64(len(m))); err != nil {
-		return sendProgressWriterReturn(pw, err)
+		return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 	}
 
 	// be sure to close the tar writer so everything is flushed out before we send our EOF
 	if err := tf.Close(); err != nil {
-		return sendProgressWriterReturn(pw, err)
+		return sendProgressWriterReturn(pw, o.layerReaderResp, err)
 	}
 	// send an EOF to indicate finished on the channel, but nil as our return error
-	_ = sendProgressWriterReturn(pw, io.EOF)
-	if o.layerReaderResp != nil {
-		close(o.layerReaderResp)
-	}
+	_ = sendProgressWriterReturn(pw, o.layerReaderResp, io.EOF)
 	return nil
 }
 
