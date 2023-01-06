@@ -181,7 +181,6 @@ type writer struct {
 	progress  *progress
 	backoff   Backoff
 	predicate retry.Predicate
-	layerSet  map[v1.Layer]bool
 }
 
 // url returns a url.Url for the specified path in the context of this remote image reference.
@@ -425,9 +424,8 @@ func (w *writer) uploadOne(ctx context.Context, l v1.Layer) error {
 
 			mount = h.String()
 		}
-		flag := true
+
 		if ml, ok := l.(*MountableLayer); ok {
-			flag = false
 			from = ml.Reference.Context().RepositoryStr()
 			origin = ml.Reference.Context().RegistryStr()
 		}
@@ -447,9 +445,6 @@ func (w *writer) uploadOne(ctx context.Context, l v1.Layer) error {
 			}
 			logs.Progress.Printf("mounted blob: %s", h.String())
 			return nil
-		}
-		if !flag {
-			return fmt.Errorf("an unknown error occurred while processing the mounted blob")
 		}
 
 		// Only log layers with +json or +yaml. We can let through other stuff if it becomes popular.

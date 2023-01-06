@@ -46,6 +46,7 @@ type options struct {
 	pageSize                       int
 	retryBackoff                   Backoff
 	retryPredicate                 retry.Predicate
+	layerSet                       map[string]string
 }
 
 var defaultPlatform = v1.Platform{
@@ -109,6 +110,7 @@ func makeOptions(target authn.Resource, opts ...Option) (*options, error) {
 		pageSize:       defaultPageSize,
 		retryPredicate: defaultRetryPredicate,
 		retryBackoff:   defaultRetryBackoff,
+		layerSet:       nil,
 	}
 
 	for _, option := range opts {
@@ -287,6 +289,13 @@ func WithRetryBackoff(backoff Backoff) Option {
 func WithRetryPredicate(predicate retry.Predicate) Option {
 	return func(o *options) error {
 		o.retryPredicate = predicate
+		return nil
+	}
+}
+
+func WithLayerSet(layerSet map[string]string) Option {
+	return func(o *options) error {
+		o.layerSet = layerSet
 		return nil
 	}
 }

@@ -16,6 +16,7 @@ package remote
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -45,6 +46,7 @@ type remoteImage struct {
 	config       []byte
 	mediaType    types.MediaType
 	descriptor   *v1.Descriptor
+	layerSet     map[string]string
 }
 
 var _ partial.CompressedImageCore = (*remoteImage)(nil)
@@ -135,6 +137,10 @@ func (r *remoteImage) Descriptor() (*v1.Descriptor, error) {
 type remoteImageLayer struct {
 	ri     *remoteImage
 	digest v1.Hash
+}
+
+func (rl *remoteImageLayer) Uncompressed() (io.ReadCloser, error) {
+	return nil, errors.New("NYI: remote.Image.Layer.Uncompressed is not implemented")
 }
 
 // Digest implements partial.CompressedLayer
@@ -248,5 +254,21 @@ func (r *remoteImage) LayerByDigest(h v1.Hash) (partial.CompressedLayer, error) 
 }
 
 func (r *remoteImage) LayerByMountable(h v1.Hash) (v1.Layer, bool, error) {
+	// 传了layerSet才主动对基础镜像进行mount处理,否则按照原逻辑调用http接口获取
+	if r.layerSet != nil {
+		if imageName, ok := r.layerSet[h.Hex]; ok {
+			tag, err := name.NewTag(imageName)
+			if err != nil {
+				return nil, false, err
+			}
+			return &MountableLayer{
+				Layer: &remoteImageLayer{
+					ri:     r,
+					digest: h,
+				},
+				Reference: tag,
+			}, true, nil
+		}
+	}
 	return nil, false, nil
 }

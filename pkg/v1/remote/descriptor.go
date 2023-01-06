@@ -62,6 +62,7 @@ type Descriptor struct {
 
 	// So we can share this implementation with Image..
 	platform v1.Platform
+	LayerSet map[string]string
 }
 
 // RawManifest exists to satisfy the Taggable interface.
@@ -132,6 +133,7 @@ func get(ref name.Reference, acceptable []types.MediaType, options ...Option) (*
 		Manifest:   b,
 		Descriptor: *desc,
 		platform:   o.platform,
+		LayerSet:   o.layerSet,
 	}, nil
 }
 
@@ -198,6 +200,7 @@ func (d *Descriptor) remoteImage() *remoteImage {
 		manifest:   d.Manifest,
 		mediaType:  d.MediaType,
 		descriptor: &d.Descriptor,
+		layerSet:   d.LayerSet,
 	}
 }
 

@@ -56,10 +56,22 @@ func (mi *mountableImage) Layers() ([]v1.Layer, error) {
 	}
 	mls := make([]v1.Layer, 0, len(ls))
 	for _, l := range ls {
-		mls = append(mls, &MountableLayer{
-			Layer:     l,
-			Reference: mi.Reference,
-		})
+		if _, ok := l.(*MountableLayer); ok {
+			// 针对于crane.Copy()的改造：
+			// 原逻辑：无论是不是基础镜像的layer,都会尝试mount一遍,mount不成功,会调用http接口获取layer信息.
+			// 而Reference内部记录的是"原registry/image",当前(目标)registry中不存在这个"原registry/image",就会导致mount不成功
+			// 现逻辑：由于目标registry中必定会存在基础镜像layer(内部设计),通过layerSet让基础镜像的layer mount成功
+			// Reference内部记录"原registry/image"变为"lib/image",就会从当前(目标)registry中mount
+			// ps1 如果不是"lib/image",而是"image"的话,会自动拼接成"library/image",会导致mount时会从docker.io获取
+			// ps2 如果不传layerSet还是按照原逻辑进行
+			mls = append(mls, l)
+		} else {
+			// 非基础镜像layer
+			mls = append(mls, &MountableLayer{
+				Layer:     l,
+				Reference: mi.Reference,
+			})
+		}
 	}
 	return mls, nil
 }
